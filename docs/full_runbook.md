@@ -1,6 +1,79 @@
-# X500 Gimbal ArUco Precision Landing Guide
+# X500 Gimbal Precision Landing Guide
 
-This guide explains how to run the current prepared project from a fresh terminal: PX4 SITL + Gazebo `x500_gimbal`, a ground ArUco landing pad, a ROS 2 camera bridge, and the `px4_offboard` precision landing node.
+This guide explains how to run the current prepared project from a fresh terminal: PX4 SITL + Gazebo `x500_gimbal`, ground marker landing pads, a ROS 2 camera bridge, and the `px4_offboard` precision landing nodes.
+
+The project now includes two marker options:
+
+- AprilTag `tag25h9`: four selectable tags in `apriltag_landing`, using `apriltag_precision_lander`.
+- ArUco: the original single-pad world in `aruco_landing`, using `aruco_precision_lander`.
+
+For new tests, use AprilTag first. It is more reliable for this camera/landing setup because it is designed for stronger detection under blur, perspective distortion, and distance.
+
+## AprilTag Quick Start
+
+Install/copy the AprilTag files from this repository into PX4:
+
+```bash
+cp px4/Tools/simulation/gz/worlds/apriltag_landing.sdf \
+  ~/PX4/Tools/simulation/gz/worlds/apriltag_landing.sdf
+
+for id in 0 1 2 3; do
+  mkdir -p ~/PX4/Tools/simulation/gz/models/apriltag_${id}
+  cp -a px4/Tools/simulation/gz/models/apriltag_${id}/. \
+    ~/PX4/Tools/simulation/gz/models/apriltag_${id}/
+done
+```
+
+Install/copy the ROS node:
+
+```bash
+mkdir -p ~/px4_ws/src
+cp -a ros2_ws/src/px4_offboard ~/px4_ws/src/
+
+cd ~/px4_ws
+source /opt/ros/humble/setup.bash
+colcon build --packages-select px4_offboard --symlink-install
+source ~/px4_ws/install/setup.bash
+```
+
+The AprilTag world contains four selectable landing targets:
+
+```text
+tag 0: x= 3.0, y= 2.0
+tag 1: x= 3.0, y=-2.0
+tag 2: x=-3.0, y= 2.0
+tag 3: x=-3.0, y=-2.0
+```
+
+Run PX4:
+
+```bash
+cd ~/PX4
+PX4_GZ_WORLD=apriltag_landing PX4_GZ_NO_FOLLOW=1 make px4_sitl gz_x500_gimbal
+```
+
+Run the camera bridge:
+
+```bash
+source /opt/ros/humble/setup.bash
+
+ros2 run ros_gz_bridge parameter_bridge \
+  "/world/apriltag_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image@sensor_msgs/msg/Image[gz.msgs.Image" \
+  "/world/apriltag_landing/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock" \
+  --ros-args \
+  -r "/world/apriltag_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image:=/gimbal_camera" \
+  -r "/world/apriltag_landing/clock:=/clock"
+```
+
+Run the selected-tag lander:
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/px4_ws/install/setup.bash
+ros2 run px4_offboard apriltag_precision_lander --ros-args -p target_tag_id:=0
+```
+
+Change `target_tag_id` to `1`, `2`, or `3` to land on a different AprilTag. The node ignores visible tags that do not match the selected ID.
 
 This is a run and handoff guide, not a chat-history reconstruction. The commands below do not create the custom world, marker model, or ROS 2 landing node. Those files must already exist in the workspace, or they must be copied from this project before running the scenario.
 

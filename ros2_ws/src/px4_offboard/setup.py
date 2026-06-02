@@ -21,6 +21,7 @@ setup(
             'drone_controller = px4_offboard.drone_controller:main',
             'camera_viewer    = px4_offboard.camera_viewer:main',
             'aruco_precision_lander = px4_offboard.aruco_precision_lander:main',
+            'apriltag_precision_lander = px4_offboard.apriltag_precision_lander:main',
         ],
     },
 )
