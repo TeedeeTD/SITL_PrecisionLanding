@@ -5,16 +5,16 @@ apriltag_precision_lander.py
 UAV AprilTag Precision Landing using ROS 2 Offboard position control.
 
 Flow:
-  INIT → TAKEOFF → GIMBAL_DOWN → FLY_TO_SEARCH → SEARCH
+  INIT → TAKEOFF → GIMBAL_DOWN → SEARCH
     → HORIZONTAL_APPROACH → DESCEND_OVER_TARGET → FINAL_APPROACH
     → LAND at 0.1m → DONE
 
 Architecture:
-  1. ROS2 node controls offboard takeoff + fly to search area
+  1. ROS2 node controls offboard takeoff + visual search
   2. Gimbal camera pitches down to look at ground
   3. AprilTag 25h9 detection via OpenCV
   4. Publishes MAVLink LANDING_TARGET for PX4-compatible target reporting
-  5. Uses PX4-style precision landing phases in Offboard control
+  5. Uses the proven ArUco-style visual centering and PX4-style landing phases
 
 Launch:
   Terminal 1: PX4_GZ_WORLD=apriltag_landing PX4_GZ_NO_FOLLOW=1 make px4_sitl gz_x500_gimbal
@@ -95,15 +95,15 @@ class Config:
     CTRL_HZ       = 20     # Hz
     WARMUP_SEC    = 2.0
     GIMBAL_SETTLE_SEC = 4.0
-    SEARCH_TIMEOUT = 30.0  # seconds before giving up search
+    SEARCH_TIMEOUT = 60.0  # seconds before giving up search
     SEARCH_DIAG_INTERVAL = 2.0
-    TARGET_SEND_HZ = 10    # Hz for LANDING_TARGET messages
+    TARGET_SEND_HZ = 20    # Hz for LANDING_TARGET messages
     LANDING_TARGET_Z = 0.0
     DESCENT_RATE = 0.45     # m/s
     FINAL_ALT = 0.10        # m above ground before switching to land mode
     FORCE_DISARM_DELAY = 8.0
     FORCE_DISARM_MAGIC = 21196.0
-    ALIGN_TIMEOUT = 18.0
+    ALIGN_TIMEOUT = 45.0
 
     # PX4 precision-landing equivalents. See PX4 PLD_HACC_RAD, PLD_BTOUT,
     # PLD_FAPPR_ALT, PLD_MAX_SRCH, and PLD_SRCH_ALT.
@@ -118,7 +118,8 @@ class Config:
     LOST_TARGET_DESCENT_RATE = 0.25
 
     MARKER_LOST_TIMEOUT = 1.5
-    TARGET_CURRENT_TIMEOUT = 0.35
+    TARGET_CURRENT_TIMEOUT = 1.2
+    VISION_REUSE_TIMEOUT = 1.2
     VISION_TARGET_ALPHA = 0.25
     MAX_TARGET_OFFSET_FROM_SEARCH = 1.5
     MAX_VISUAL_CORRECTION = 8.0
@@ -217,6 +218,7 @@ class AprilTagPrecisionLander(Node):
         self.camera_frame_count = 0
         self.last_camera_frame_time = 0.0
         self.last_detection_time = 0.0
+        self._last_processed_detection_time = 0.0
         self.target_abs: Optional[np.ndarray] = None
         self.target_rel_xy: Optional[np.ndarray] = None
         self.target_rel_norm = float('inf')
@@ -230,7 +232,6 @@ class AprilTagPrecisionLander(Node):
         self._gimbal_set     = False
         self._gimbal_control_configured = False
         self._gimbal_cmd_failures = 0
-        self._precland_sent  = False
         self._target_counter = 0
         self._centered_count = 0
         self._search_attempts = 0
@@ -245,7 +246,6 @@ class AprilTagPrecisionLander(Node):
         self._search_anchor = np.array(cfg.SEARCH_POS, dtype=float)
         self._search_wp_index = 0
         self._search_wp_arrival_time = None
-        self._last_guidance_log = 0.0
 
         # Control loop
         self.timer = self.create_timer(1.0 / cfg.CTRL_HZ, self._loop)
@@ -318,12 +318,18 @@ class AprilTagPrecisionLander(Node):
 
                 matches = np.where(ids_flat == self.target_tag_id)[0]
                 if len(matches) == 0:
-                    self.marker_detected = False
-                    self.marker_tvec = None
-                    self.marker_rvec = None
-                    self.marker_center_px = None
-                    self.marker_id = None
-                    self.get_logger().warn(
+                    # Do not clear the selected-tag estimate immediately. In
+                    # this simulation the tag can flicker for a few frames while
+                    # the gimbal/camera view crosses other tags. Keeping the
+                    # last selected target briefly matches the ArUco behavior
+                    # and avoids chasing non-target tags.
+                    if now - self.last_detection_time > Config.MARKER_LOST_TIMEOUT:
+                        self.marker_detected = False
+                        self.marker_tvec = None
+                        self.marker_rvec = None
+                        self.marker_center_px = None
+                        self.marker_id = None
+                    self.get_logger().info(
                         f'Target tag {self.target_tag_id} not in view; visible={ids_flat.tolist()}',
                         throttle_duration_sec=2.0)
                     return
@@ -393,8 +399,14 @@ class AprilTagPrecisionLander(Node):
     # ══════════════════════════════════════════════════════════════
 
     def _loop(self):
-        # Always publish offboard heartbeat
-        self._pub_offboard()
+        offboard_states = {
+            'INIT', 'TAKEOFF', 'GIMBAL_DOWN',
+            'SEARCH', 'HORIZONTAL_APPROACH', 'DESCEND_OVER_TARGET',
+            'FINAL_APPROACH', 'TARGET_LOST', 'LAND',
+        }
+
+        if self.state in offboard_states:
+            self._pub_offboard()
 
         # State machine dispatch
         handler = getattr(self, f'_state_{self.state.lower()}', None)
@@ -403,8 +415,8 @@ class AprilTagPrecisionLander(Node):
         else:
             self.get_logger().error(f'Unknown state: {self.state}')
 
-        # Publish setpoint (needed while in offboard mode)
-        self._pub_setpoint()
+        if self.state in offboard_states:
+            self._pub_setpoint()
 
     # ══════════════════════════════════════════════════════════════
     #  STATE HANDLERS
@@ -439,43 +451,6 @@ class AprilTagPrecisionLander(Node):
             self._reset_search_pattern(self.pos[:2])
             self._transition('GIMBAL_DOWN')
 
-    def _state_fly_to_search(self):
-        """Use visual tag-map guidance to fly toward the selected marker."""
-        cfg = Config
-
-        if self._marker_recent():
-            self.get_logger().info('🎯 Selected tag visible — starting horizontal approach')
-            self._align_start = time.time()
-            self._target_counter = 0
-            self._centered_count = 0
-            self._transition('HORIZONTAL_APPROACH')
-            return
-
-        if self._update_target_from_tag_map():
-            self.sp = self._step_setpoint_to_target(-cfg.CRUISE_ALT, cfg.MAX_APPROACH_STEP)
-            if self._target_counter % cfg.CTRL_HZ == 0:
-                self.get_logger().info(
-                    f'🧭 Visual fly-to-search for tag {self.target_tag_id}: '
-                    f'target_rel={self.target_rel_norm:.2f}m, '
-                    f'target=[{self.target_abs[0]:.2f}, {self.target_abs[1]:.2f}], '
-                    f'visible={self._recent_visible_tag_ids()}')
-            self._target_counter += 1
-
-            if self._target_xy_error() < cfg.SEARCH_ACCEPT_RADIUS:
-                self.get_logger().info('📍 Reached visual target estimate — searching around it')
-                self._search_start = time.time()
-                self._reset_search_pattern(self.target_abs[:2])
-                self._target_counter = 0
-                self._transition('SEARCH')
-            return
-
-        self._run_search_pattern()
-
-        if self._search_start is not None and time.time() - self._search_start > cfg.SEARCH_TIMEOUT:
-            self.get_logger().warn('Visual fly-to-search timeout — landing normally')
-            self._cmd(VehicleCommand.VEHICLE_CMD_NAV_LAND)
-            self._transition('DONE')
-
     def _state_gimbal_down(self):
         """Pitch gimbal to look straight down (-90°)"""
         self.sp = np.array([0.0, 0.0, -Config.CRUISE_ALT])
@@ -490,18 +465,18 @@ class AprilTagPrecisionLander(Node):
             self.warmup_count = 0
             self._gimbal_set = True
             self._search_start = time.time()
-            self._reset_search_pattern(self.target_abs[:2])
-            self.get_logger().info('📷 Gimbal settle complete — starting visual tag search')
-            self._transition('FLY_TO_SEARCH')
+            self._reset_search_pattern(self.pos[:2])
+            self.get_logger().info('📷 Gimbal settle complete — starting camera-based tag search')
+            self._transition('SEARCH')
 
     def _state_search(self):
-        """Search for the selected AprilTag, using non-target tags as map anchors."""
+        """Search until the selected AprilTag is detected."""
         cfg = Config
         self._log_search_diagnostics()
 
         if self._marker_recent():
             self.get_logger().info(
-                f'🎯 AprilTag {self.marker_id} DETECTED! tvec=[{self.marker_tvec[0]:.2f}, '
+                f'🎯 Selected AprilTag {self.marker_id} DETECTED! tvec=[{self.marker_tvec[0]:.2f}, '
                 f'{self.marker_tvec[1]:.2f}, {self.marker_tvec[2]:.2f}]')
             self._update_target_from_vision()
             self._align_start = time.time()
@@ -510,21 +485,8 @@ class AprilTagPrecisionLander(Node):
             self._transition('HORIZONTAL_APPROACH')
             return
 
-        if self._update_target_from_tag_map():
-            self._log_guidance(
-                f'🧭 Using visible tag pose to find tag {self.target_tag_id}: '
-                f'target=[{self.target_abs[0]:.2f}, {self.target_abs[1]:.2f}], '
-                f'error={self._target_xy_error():.2f}m')
-            self.sp = self._step_setpoint_to_target(-cfg.CRUISE_ALT, cfg.MAX_APPROACH_STEP)
-            if self._target_xy_error() > cfg.SEARCH_ACCEPT_RADIUS:
-                self._transition('FLY_TO_SEARCH')
-            else:
-                self._reset_search_pattern(self.target_abs[:2])
-            return
-
         self._run_search_pattern()
 
-        # Timeout check
         elapsed = time.time() - self._search_start
         if elapsed > cfg.SEARCH_TIMEOUT:
             self.get_logger().warn('⏰ Search timeout — landing normally')
@@ -565,7 +527,7 @@ class AprilTagPrecisionLander(Node):
             if not self._update_target_from_vision():
                 self._start_target_lost('vision correction unavailable during horizontal approach')
                 return
-        elif not self._update_target_from_tag_map():
+        else:
             self._start_target_lost('target lost during horizontal approach')
             return
 
@@ -699,15 +661,6 @@ class AprilTagPrecisionLander(Node):
             self._transition('HORIZONTAL_APPROACH')
             return
 
-        if self._target_lost_from_state != 'DESCEND_OVER_TARGET' and self._update_target_from_tag_map():
-            self.sp = self._step_setpoint_to_target(-cfg.CRUISE_ALT, cfg.MAX_APPROACH_STEP)
-            if self._target_counter % cfg.CTRL_HZ == 0:
-                self.get_logger().info(
-                    f'🔁 Tag-map recovery: target=[{self.target_abs[0]:.2f}, '
-                    f'{self.target_abs[1]:.2f}], error={self._target_xy_error():.2f}m')
-            self._target_counter += 1
-            return
-
         elapsed = time.time() - self._target_lost_start
 
         if self._target_lost_from_state == 'DESCEND_OVER_TARGET':
@@ -751,10 +704,6 @@ class AprilTagPrecisionLander(Node):
         if self._marker_recent():
             self._update_target_from_vision()
             self._send_current_landing_target()
-        elif self.target_abs is None:
-            self.target_abs = self._pad_target_abs()
-
-        self.sp = np.array([self.target_abs[0], self.target_abs[1], -cfg.FINAL_ALT])
 
         if not self._land_cmd_sent:
             self._cmd(VehicleCommand.VEHICLE_CMD_NAV_LAND)
@@ -799,26 +748,10 @@ class AprilTagPrecisionLander(Node):
     def _marker_recent(self) -> bool:
         return self.marker_detected and (time.time() - self.last_detection_time) < Config.TARGET_CURRENT_TIMEOUT
 
-    def _recent_visible_tag_ids(self):
-        return [
-            marker_id for marker_id in sorted(self.detected_tags)
-            if self._tag_recent(marker_id)
-        ]
-
     def _target_xy_error(self) -> float:
         if self.target_abs is None:
             return float('inf')
         return float(np.linalg.norm(self.pos[:2] - self.target_abs[:2]))
-
-    def _tag_recent(self, marker_id: int) -> bool:
-        tag = self.detected_tags.get(marker_id)
-        return bool(tag and (time.time() - tag['time']) < Config.MARKER_LOST_TIMEOUT)
-
-    def _log_guidance(self, text: str):
-        now = time.time()
-        if now - self._last_guidance_log >= 1.0:
-            self.get_logger().info(text)
-            self._last_guidance_log = now
 
     def _reset_search_pattern(self, anchor_xy: np.ndarray):
         self._search_anchor = np.array(anchor_xy, dtype=float)
@@ -949,10 +882,17 @@ class AprilTagPrecisionLander(Node):
         dx_px = float(center_px[0] - cfg.CAM_CX)
         dy_px = float(center_px[1] - cfg.CAM_CY)
 
-        # Image x is camera-right/east; image y is camera-down/south for a nadir view.
-        rel_north = -dy_px * meters_per_px_y
-        rel_east = dx_px * meters_per_px_x
-        rel = np.array([rel_north, rel_east], dtype=float)
+        # Image x is camera-right; image y is camera-down/south for a nadir view.
+        # Rotate the vehicle-carried offset into local NED.
+        north_vehicle = -dy_px * meters_per_px_y
+        east_vehicle = dx_px * meters_per_px_x
+        yaw = self._yaw_from_attitude()
+        c = math.cos(yaw)
+        s = math.sin(yaw)
+        rel = np.array([
+            c * north_vehicle - s * east_vehicle,
+            s * north_vehicle + c * east_vehicle,
+        ], dtype=float)
 
         norm = float(np.linalg.norm(rel))
         if norm > max_correction:
@@ -974,6 +914,20 @@ class AprilTagPrecisionLander(Node):
     def _update_target_from_vision(self) -> bool:
         """Update target from the selected tag pose relative to the UAV."""
         cfg = Config
+        if self.last_detection_time <= self._last_processed_detection_time:
+            if (
+                self.target_abs is not None
+                and (time.time() - self.last_detection_time) < cfg.VISION_REUSE_TIMEOUT
+            ):
+                # Reuse the fixed target from the last selected-tag frame for a
+                # short period, but do not create a new moving target from stale
+                # image pixels.
+                rel_xy = self.target_abs[:2] - self.pos[:2]
+                self.target_rel_xy = rel_xy
+                self.target_rel_norm = float(np.linalg.norm(rel_xy))
+                return True
+            return False
+
         rel_xy = self._selected_marker_rel_world()
         if rel_xy is None:
             if self.target_abs is None:
@@ -995,56 +949,7 @@ class AprilTagPrecisionLander(Node):
             )
 
         self.target_abs = np.array([target_xy[0], target_xy[1], cfg.LANDING_TARGET_Z])
-        return True
-
-    def _update_target_from_tag_map(self) -> bool:
-        """Use any visible tag pose plus known tag spacing to estimate selected tag offset."""
-        cfg = Config
-        selected_known = np.array(cfg.TAG_POSITIONS[self.target_tag_id], dtype=float)
-        best = None
-
-        for marker_id in self._recent_visible_tag_ids():
-            if marker_id not in cfg.TAG_POSITIONS:
-                continue
-
-            tag = self.detected_tags.get(marker_id)
-            if tag is None:
-                continue
-
-            rel_visible = self._tvec_rel_world(tag['tvec'])
-            if rel_visible is None:
-                continue
-
-            visible_known = np.array(cfg.TAG_POSITIONS[marker_id], dtype=float)
-            rel_selected = rel_visible + (selected_known - visible_known)
-            rel_norm = float(np.linalg.norm(rel_selected))
-            if rel_norm > cfg.MAX_VISUAL_CORRECTION:
-                continue
-
-            if best is None or rel_norm < best[0]:
-                best = (rel_norm, marker_id, rel_selected)
-
-        if best is None:
-            return False
-
-        target_norm, marker_id, target_rel = best
-        measured_target_xy = self.pos[:2] + target_rel
-        if self.target_abs is None:
-            target_xy = measured_target_xy
-        else:
-            target_xy = (
-                (1.0 - cfg.VISION_TARGET_ALPHA) * self.target_abs[:2]
-                + cfg.VISION_TARGET_ALPHA * measured_target_xy
-            )
-
-        self.target_rel_xy = target_rel
-        self.target_rel_norm = target_norm
-        self.target_abs = np.array([target_xy[0], target_xy[1], cfg.LANDING_TARGET_Z])
-        self._search_anchor = self.target_abs[:2].copy()
-        self._log_guidance(
-            f'🧭 Relative tag-map guidance from tag {marker_id}: '
-            f'target_rel={target_norm:.2f}m, '
-            f'target=[{target_xy[0]:.2f}, {target_xy[1]:.2f}]')
+        self._last_processed_detection_time = self.last_detection_time
         return True
 
     def _send_current_landing_target(self):
@@ -1062,36 +967,12 @@ class AprilTagPrecisionLander(Node):
         self._send_landing_target(rel_x, rel_y, rel_z)
 
     def _selected_marker_rel_world(self) -> Optional[np.ndarray]:
-        if self.marker_tvec is None:
+        if self.marker_center_px is None:
             return None
-        return self._tvec_rel_world(self.marker_tvec)
-
-    def _tvec_rel_world(self, tvec: np.ndarray) -> Optional[np.ndarray]:
-        """Convert tag translation from camera frame into world NED x/y offset."""
-        if tvec is None:
-            return None
-
-        north_vehicle, east_vehicle, _ = self._marker_rel_ned_from_tvec(tvec)
-        yaw = self._yaw_from_attitude()
-        c = math.cos(yaw)
-        s = math.sin(yaw)
-
-        north = c * north_vehicle - s * east_vehicle
-        east = s * north_vehicle + c * east_vehicle
-        return np.array([north, east], dtype=float)
-
-    def _marker_rel_ned_from_tvec(self, tvec: np.ndarray) -> Tuple[float, float, float]:
-        """Convert marker translation from camera frame into vehicle-carried NED."""
-        # Camera frame from OpenCV pose: x=right, y=down, z=forward into scene.
-        # With the gimbal pitched down: camera x -> east, camera y -> -north, camera z -> down.
-        return (
-            float(-tvec[1]),
-            float(tvec[0]),
-            float(tvec[2]),
+        return self._image_center_rel_ned(
+            self.marker_center_px,
+            Config.MAX_VISUAL_CORRECTION,
         )
-
-    def _marker_rel_ned(self) -> Tuple[float, float, float]:
-        return self._marker_rel_ned_from_tvec(self.marker_tvec)
 
     def _yaw_from_attitude(self) -> float:
         w, x, y, z = [float(v) for v in self.q_att]
@@ -1233,6 +1114,10 @@ class AprilTagPrecisionLander(Node):
         self.pub_cmd.publish(msg)
 
     def _transition(self, new_state: str):
+        if new_state == 'SEARCH':
+            self._target_counter = 0
+        elif new_state == 'LAND':
+            self._disarm_retry_counter = 0
         self.get_logger().info(f'State: {self.state} → {new_state}')
         self.state = new_state
 

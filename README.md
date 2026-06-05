@@ -77,22 +77,13 @@ cd ~/gimbal_simulation
 
 ## 4. Copy PX4 Simulation Files
 
-Copy the custom Gazebo worlds:
+For the AprilTag mission, copy only the AprilTag world and AprilTag marker models. The ArUco world/model is optional and is not required to run `apriltag_precision_lander`.
+
+Copy the AprilTag Gazebo world:
 
 ```bash
-cp px4/Tools/simulation/gz/worlds/aruco_landing.sdf \
-  ~/PX4/Tools/simulation/gz/worlds/aruco_landing.sdf
-
 cp px4/Tools/simulation/gz/worlds/apriltag_landing.sdf \
   ~/PX4/Tools/simulation/gz/worlds/apriltag_landing.sdf
-```
-
-Copy the ArUco marker model:
-
-```bash
-mkdir -p ~/PX4/Tools/simulation/gz/models/arucotag
-cp -a px4/Tools/simulation/gz/models/arucotag/. \
-  ~/PX4/Tools/simulation/gz/models/arucotag/
 ```
 
 Copy the four AprilTag marker models:
@@ -116,12 +107,12 @@ cp -a px4/Tools/simulation/gz/models/x500_gimbal/. \
 Verify:
 
 ```bash
-ls ~/PX4/Tools/simulation/gz/worlds/aruco_landing.sdf
 ls ~/PX4/Tools/simulation/gz/worlds/apriltag_landing.sdf
-ls ~/PX4/Tools/simulation/gz/models/arucotag/model.sdf
 ls ~/PX4/Tools/simulation/gz/models/apriltag_0/model.sdf
 ls ~/PX4/Tools/simulation/gz/models/x500_gimbal/model.sdf
 ```
+
+Optional ArUco files are included in this repository for the old single-marker scenario, but the AprilTag mission does not depend on them.
 
 ## 5. Copy ROS 2 Package
 
@@ -132,11 +123,11 @@ mkdir -p ~/px4_ws/src
 cp -a ros2_ws/src/px4_offboard ~/px4_ws/src/
 ```
 
-The main custom nodes are:
+The AprilTag node is independent from the ArUco node. They are separate console scripts in the same ROS package:
 
 ```text
-~/px4_ws/src/px4_offboard/px4_offboard/aruco_precision_lander.py
 ~/px4_ws/src/px4_offboard/px4_offboard/apriltag_precision_lander.py
+~/px4_ws/src/px4_offboard/px4_offboard/aruco_precision_lander.py
 ```
 
 The package entry points are registered in:
@@ -148,8 +139,8 @@ The package entry points are registered in:
 as:
 
 ```python
-aruco_precision_lander = px4_offboard.aruco_precision_lander:main
 apriltag_precision_lander = px4_offboard.apriltag_precision_lander:main
+aruco_precision_lander = px4_offboard.aruco_precision_lander:main
 ```
 
 ## 6. Build ROS 2 Workspace
@@ -164,6 +155,12 @@ source ~/px4_ws/install/setup.bash
 If you see DDS payload size errors later, your `px4_msgs` package does not match your PX4 checkout. Re-sync PX4 messages and rebuild the workspace.
 
 ## 7. Run AprilTag Landing
+
+For an AprilTag-only guide that does not depend on the ArUco scenario, use:
+
+```text
+docs/apriltag_mission_runbook.md
+```
 
 The AprilTag world has four `tag25h9` markers. Select the landing target with `target_tag_id`.
 
@@ -216,9 +213,9 @@ source ~/px4_ws/install/setup.bash
 ros2 run px4_offboard apriltag_precision_lander --ros-args -p target_tag_id:=0
 ```
 
-Change `target_tag_id` to `1`, `2`, or `3` to land on another tag. After takeoff, the node searches visually from the UAV's current position instead of flying directly to a fixed target coordinate.
+Change `target_tag_id` to `1`, `2`, or `3` to land on another tag.
 
-The AprilTag node uses visible tags for relative navigation. For example, if the target is tag `1` but the camera sees tag `0` or `2`, the node combines that tag's camera pose with the known tag-to-tag spacing to estimate the relative direction to tag `1`. If no useful tag is visible, it runs an expanding square search around the current or last estimated target position.
+The AprilTag node searches visually from the UAV's current position. It ignores non-target tags during correction, because mixing tag IDs can make the target estimate jump. When the selected `target_tag_id` is detected, the node moves horizontally using the selected tag's image-center error, streams MAVLink `LANDING_TARGET`, descends while correcting, then lets PX4 finish normal land/disarm at low altitude.
 
 If the node prints only the ready lines and never prints `State: INIT -> TAKEOFF`, the control loop is not ticking. Rebuild the workspace after copying the latest node:
 
@@ -286,7 +283,6 @@ Select:
 INIT
 -> TAKEOFF
 -> GIMBAL_DOWN
--> FLY_TO_SEARCH
 -> SEARCH
 -> HORIZONTAL_APPROACH
 -> DESCEND_OVER_TARGET
@@ -295,7 +291,7 @@ INIT
 -> DONE
 ```
 
-Temporary `target lost during descent` logs are acceptable after the UAV has already reached `DESCEND_OVER_TARGET`. The node continues on the last good target for a short grace period and reacquires if the marker returns.
+Temporary target-loss logs are acceptable if the selected tag drops out for a few frames. The node keeps the last selected-tag estimate briefly, then either reacquires and continues or runs the bounded search pattern.
 
 ## 11. Stop Everything
 
@@ -308,3 +304,4 @@ pkill -9 -f "gz sim|px4|MicroXRCEAgent|micro-xrce-dds-agent|ros_gz_bridge|aruco_
 - AprilTag uses OpenCV's `DICT_APRILTAG_25h9` dictionary.
 - Each AprilTag pad is `0.5m x 0.5m`.
 - AprilTag generally gives stronger detection under blur, perspective distortion, and longer range than ArUco, which is why it is a better fit for this landing test.
+- PX4 Precision Land expects `LANDING_TARGET` in `MAV_FRAME_LOCAL_NED` and uses the message `x`, `y`, and `z` fields. This project streams that message for compatibility, while the Python node performs the visual centering in Offboard mode.

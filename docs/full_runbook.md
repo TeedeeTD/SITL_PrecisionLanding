@@ -73,7 +73,9 @@ source ~/px4_ws/install/setup.bash
 ros2 run px4_offboard apriltag_precision_lander --ros-args -p target_tag_id:=0
 ```
 
-Change `target_tag_id` to `1`, `2`, or `3` to land on a different AprilTag. The node ignores visible tags that do not match the selected ID.
+Change `target_tag_id` to `1`, `2`, or `3` to land on a different AprilTag.
+
+The AprilTag node searches visually from the UAV's current position. It ignores non-target tags during correction. When the selected tag is detected, the node uses the selected tag's image-center error to move horizontally, streams MAVLink `LANDING_TARGET`, descends while correcting, then lets PX4 finish normal land/disarm at low altitude.
 
 This is a run and handoff guide, not a chat-history reconstruction. The commands below do not create the custom world, marker model, or ROS 2 landing node. Those files must already exist in the workspace, or they must be copied from this project before running the scenario.
 
