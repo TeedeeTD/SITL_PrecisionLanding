@@ -9,6 +9,7 @@
   <exec_depend>px4_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>dib_msgs</exec_depend>
   <exec_depend>opencv2</exec_depend>
   <buildtool_depend>ament_python</buildtool_depend>
   <test_depend>ament_copyright</test_depend>

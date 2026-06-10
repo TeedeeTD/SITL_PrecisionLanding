@@ -71,10 +71,10 @@ flowchart TD
 
     H -->|Altitude reaches about 0.1m| I[LAND]
 
-    I -->|Send PX4 NAV_LAND| I1[Wait for land detector<br/>or low-altitude fallback]
-    I1 -->|Still armed| I2[Send disarm]
+    I -->|Send PX4 NAV_LAND| I1[Wait for PX4 land detector]
+    I1 -->|landed=true<br/>and still armed| I2[Send normal disarm]
     I2 --> I1
-    I1 -->|PX4 still says not landed<br/>after FORCE_DISARM_DELAY| I3[Force disarm]
+    I1 -->|allow_force_disarm=true only| I3[Optional force disarm<br/>simulation/test escape hatch]
     I3 --> I1
     I1 -->|Disarmed| Z[DONE]
 

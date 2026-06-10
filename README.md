@@ -55,9 +55,9 @@ cd ~/PX4
 PX4_GZ_NO_FOLLOW=1 make px4_sitl gz_x500_gimbal
 ```
 
-You also need ROS 2 Humble, `colcon`, Micro XRCE-DDS Agent, and the ROS/Gazebo
-bridge packages:
+You also need ROS 2 Humble, `colcon`, the Micro XRCE-DDS Agent, and the ROS/Gazebo bridge packages.
 
+### Installing ROS 2 Packages
 ```bash
 sudo apt update
 sudo apt install -y \
@@ -71,17 +71,43 @@ sudo apt install -y \
 pip3 install pymavlink
 ```
 
-One of these commands should exist:
+### Installing Micro XRCE-DDS Agent
+To enable communication between PX4 and ROS 2, you must install the Micro XRCE-DDS Agent.
 
+#### Option A: Build from Source (Recommended)
+Building from source is recommended as it avoids sandbox/network restrictions and works reliably with localhost-only configurations:
+```bash
+git clone https://github.com/eProsima/Micro-XRCE-DDS-Agent.git
+cd Micro-XRCE-DDS-Agent
+mkdir build && cd build
+cmake ..
+make
+sudo make install
+sudo ldconfig /usr/local/lib/
+```
+
+#### Option B: Install via Snap (Alternative)
+```bash
+sudo snap install micro-xrce-dds-agent --classic
+```
+
+Once installed, you can start the agent using:
 ```bash
 MicroXRCEAgent udp4 -p 8888
 ```
-
 or:
-
 ```bash
 micro-xrce-dds-agent udp4 -p 8888
 ```
+
+### Important: Localhost Restriction Settings (ROS_LOCALHOST_ONLY)
+* If you run with `ROS_LOCALHOST_ONLY=0` (or leave it unset), DDS discovery will work out of the box.
+* **If you enforce `export ROS_LOCALHOST_ONLY=1`**, you **must** configure the DDS participant in PX4 to also restrict itself to localhost, otherwise the ROS 2 nodes will not receive any topics.
+  To do this, start PX4 and in the PX4 console (`pxh>`) run:
+  ```bash
+  param set UXRCE_DDS_PTCFG 1
+  ```
+  Then restart PX4.
 
 ## Install This Example
 
@@ -184,13 +210,18 @@ Terminal 3: camera and clock bridge
 ```bash
 source /opt/ros/humble/setup.bash
 
-ros2 run ros_gz_bridge parameter_bridge \
-  "/world/apriltag_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image@sensor_msgs/msg/Image[gz.msgs.Image" \
-  "/world/apriltag_landing/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock" \
+gz topic -l | grep -E "camera.*/image|/image$"
+
+ros2 run ros_gz_image image_bridge \
+  "/world/apriltag_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image" \
   --ros-args \
-  -r "/world/apriltag_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image:=/gimbal_camera" \
-  -r "/world/apriltag_landing/clock:=/clock"
+  -r "/world/apriltag_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image:=/gimbal_camera"
 ```
+
+The `gz topic -l` line should print the same camera image topic used by the
+`image_bridge` command. If your Gazebo version prints a different camera topic,
+replace the hard-coded image topic in both places in the `image_bridge` command
+before starting Terminal 4.
 
 Terminal 4: landing node
 
@@ -231,13 +262,18 @@ Terminal 3:
 ```bash
 source /opt/ros/humble/setup.bash
 
-ros2 run ros_gz_bridge parameter_bridge \
-  "/world/aruco_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image@sensor_msgs/msg/Image[gz.msgs.Image" \
-  "/world/aruco_landing/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock" \
+gz topic -l | grep -E "camera.*/image|/image$"
+
+ros2 run ros_gz_image image_bridge \
+  "/world/aruco_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image" \
   --ros-args \
-  -r "/world/aruco_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image:=/gimbal_camera" \
-  -r "/world/aruco_landing/clock:=/clock"
+  -r "/world/aruco_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image:=/gimbal_camera"
 ```
+
+The `gz topic -l` line should print the same camera image topic used by the
+`image_bridge` command. If your Gazebo version prints a different camera topic,
+replace the hard-coded image topic in both places in the `image_bridge` command
+before starting Terminal 4.
 
 Terminal 4:
 
@@ -280,8 +316,39 @@ few frames.
 
 ## Troubleshooting
 
-If PX4 says the world file does not exist, run the Gazebo overlay sync again:
+### Stuck in `INIT`
+If the landing node starts but never leaves `INIT`, check that the camera topic is active and publishing:
+```bash
+ros2 topic hz /gimbal_camera
+```
 
+### Stuck in `TAKEOFF` (printing `Arming...` or `Switching to Offboard node...` continuously)
+This happens when the ROS 2 node does not receive vehicle state updates from PX4, or PX4 rejects the arming/offboard commands.
+
+1. **Check ROS 2 connectivity**:
+   Verify if the status topic is actively publishing:
+   ```bash
+   ros2 topic echo /fmu/out/vehicle_status_v4
+   ```
+   If it displays nothing, the DDS discovery between ROS 2 and the Micro XRCE-DDS Agent is failing.
+
+2. **DDS Localhost Mismatch (`ROS_LOCALHOST_ONLY`)**:
+   If you have `ROS_LOCALHOST_ONLY=1` exported in your terminals, the ROS 2 nodes will only listen on the loopback (`127.0.0.1`) interface. You **must** also configure the PX4 client to only use loopback:
+   * Run the simulation.
+   * In the PX4 console (`pxh>`), set the parameter:
+     ```bash
+     param set UXRCE_DDS_PTCFG 1
+     ```
+   * Restart the simulation.
+
+3. **Check Client Status in PX4**:
+   In the PX4 console (`pxh>`), check the client connection status:
+   ```bash
+   uxrce_dds_client status
+   ```
+
+### World File Not Found
+If PX4 says the world file does not exist, run the Gazebo overlay sync again:
 ```bash
 cd ~/PX4
 rsync -a \
@@ -289,25 +356,8 @@ rsync -a \
   Tools/simulation/gz/
 ```
 
-If the landing node starts but never leaves `INIT`, check that the camera topic
-is active:
-
-```bash
-ros2 topic hz /gimbal_camera
-```
-
-If ROS 2 reports DDS payload or message type errors, your `px4_msgs` package
-does not match your PX4 checkout. Re-sync or rebuild the workspace that provides
-`px4_msgs`, then rebuild this workspace.
-
-The landing node does not force-disarm by default. In `LAND`, it sends PX4
-`NAV_LAND`, stops streaming Offboard setpoints, waits for
-`vehicle_land_detected.landed`, and then sends a normal disarm. If it keeps
-printing `Waiting for PX4 land detector before disarm`, fix the land-detector or
-altitude/contact issue before using real hardware.
-
-To stop all related processes:
-
+### Leftover Processes
+If you see errors like `PX4 server already running for instance 0` or port conflicts, kill all leftover PX4, Gazebo, and ROS 2 processes:
 ```bash
 pkill -9 -f "gz sim|px4|MicroXRCEAgent|micro-xrce-dds-agent|ros_gz_bridge|aruco_precision_lander|apriltag_precision_lander|rqt_image_view"
 ```
@@ -449,9 +499,9 @@ cd ~/PX4
 PX4_GZ_NO_FOLLOW=1 make px4_sitl gz_x500_gimbal
 ```
 
-Bạn cũng cần ROS 2 Humble, `colcon`, Micro XRCE-DDS Agent, và các package
-ROS/Gazebo bridge:
+Bạn cũng cần ROS 2 Humble, `colcon`, Micro XRCE-DDS Agent, và các package ROS/Gazebo bridge.
 
+### Cài đặt các package ROS 2
 ```bash
 sudo apt update
 sudo apt install -y \
@@ -465,17 +515,43 @@ sudo apt install -y \
 pip3 install pymavlink
 ```
 
-Một trong hai lệnh này cần tồn tại trên máy:
+### Cài đặt Micro XRCE-DDS Agent
+Để kết nối truyền thông giữa PX4 và ROS 2, bạn cần cài đặt Micro XRCE-DDS Agent.
 
+#### Cách A: Cài đặt từ mã nguồn (Khuyên dùng)
+Cài từ source giúp tránh các lỗi sandbox/bảo mật mạng của Snap và hỗ trợ tốt cấu hình chỉ dùng localhost:
+```bash
+git clone https://github.com/eProsima/Micro-XRCE-DDS-Agent.git
+cd Micro-XRCE-DDS-Agent
+mkdir build && cd build
+cmake ..
+make
+sudo make install
+sudo ldconfig /usr/local/lib/
+```
+
+#### Cách B: Cài đặt qua Snap (Thay thế)
+```bash
+sudo snap install micro-xrce-dds-agent --classic
+```
+
+Sau khi cài đặt, bạn có thể chạy Agent bằng lệnh:
 ```bash
 MicroXRCEAgent udp4 -p 8888
 ```
-
 hoặc:
-
 ```bash
 micro-xrce-dds-agent udp4 -p 8888
 ```
+
+### Lưu ý quan trọng về chế độ Localhost (`ROS_LOCALHOST_ONLY`)
+* Nếu bạn để mặc định `ROS_LOCALHOST_ONLY=0` (hoặc không set), hệ thống sẽ kết nối bình thường ngay lập tức.
+* **Nếu bạn set `export ROS_LOCALHOST_ONLY=1`**, bạn **bắt buộc** phải cấu hình PX4 chỉ sử dụng localhost để đồng bộ.
+  Hãy bật PX4 lên, gõ lệnh sau trong terminal `pxh>`:
+  ```bash
+  param set UXRCE_DDS_PTCFG 1
+  ```
+  Sau đó khởi động lại PX4.
 
 ## Cài ví dụ này
 
@@ -578,13 +654,18 @@ Terminal 3: bridge camera và clock
 ```bash
 source /opt/ros/humble/setup.bash
 
-ros2 run ros_gz_bridge parameter_bridge \
-  "/world/apriltag_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image@sensor_msgs/msg/Image[gz.msgs.Image" \
-  "/world/apriltag_landing/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock" \
+gz topic -l | grep -E "camera.*/image|/image$"
+
+ros2 run ros_gz_image image_bridge \
+  "/world/apriltag_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image" \
   --ros-args \
-  -r "/world/apriltag_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image:=/gimbal_camera" \
-  -r "/world/apriltag_landing/clock:=/clock"
+  -r "/world/apriltag_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image:=/gimbal_camera"
 ```
+
+Dòng `gz topic -l` phải in ra đúng camera image topic đang dùng trong lệnh
+`image_bridge`. Nếu Gazebo version của bạn in ra camera topic khác, hãy thay
+image topic hard-code ở cả hai vị trí trong lệnh `image_bridge` trước khi chạy
+Terminal 4.
 
 Terminal 4: landing node
 
@@ -625,13 +706,18 @@ Terminal 3:
 ```bash
 source /opt/ros/humble/setup.bash
 
-ros2 run ros_gz_bridge parameter_bridge \
-  "/world/aruco_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image@sensor_msgs/msg/Image[gz.msgs.Image" \
-  "/world/aruco_landing/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock" \
+gz topic -l | grep -E "camera.*/image|/image$"
+
+ros2 run ros_gz_image image_bridge \
+  "/world/aruco_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image" \
   --ros-args \
-  -r "/world/aruco_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image:=/gimbal_camera" \
-  -r "/world/aruco_landing/clock:=/clock"
+  -r "/world/aruco_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image:=/gimbal_camera"
 ```
+
+Dòng `gz topic -l` phải in ra đúng camera image topic đang dùng trong lệnh
+`image_bridge`. Nếu Gazebo version của bạn in ra camera topic khác, hãy thay
+image topic hard-code ở cả hai vị trí trong lệnh `image_bridge` trước khi chạy
+Terminal 4.
 
 Terminal 4:
 
@@ -674,8 +760,39 @@ vài frame.
 
 ## Xử lý lỗi
 
-Nếu PX4 báo không tìm thấy world file, sync Gazebo overlay lại:
+### Bị kẹt ở `INIT`
+Nếu landing node chạy nhưng không rời khỏi trạng thái `INIT`, hãy kiểm tra xem camera topic đã hoạt động và đang publish hay chưa:
+```bash
+ros2 topic hz /gimbal_camera
+```
 
+### Bị kẹt ở `TAKEOFF` (liên tục in `Arming...` hoặc `Switching to Offboard node...`)
+Lỗi này xảy ra khi node ROS 2 không nhận được thông tin trạng thái từ PX4, hoặc PX4 từ chối lệnh Arm/Offboard.
+
+1. **Kiểm tra kết nối ROS 2**:
+   Xem thử có nhận được dữ liệu trạng thái từ PX4 hay không:
+   ```bash
+   ros2 topic echo /fmu/out/vehicle_status_v4
+   ```
+   Nếu lệnh trên không hiển thị gì, nghĩa là quá trình DDS discovery giữa ROS 2 và Micro XRCE-DDS Agent đang thất bại.
+
+2. **Đồng bộ chế độ Localhost (`ROS_LOCALHOST_ONLY`)**:
+   Nếu bạn có `export ROS_LOCALHOST_ONLY=1` ở các terminal, các node ROS 2 chỉ giao tiếp trên card loopback `127.0.0.1`. Bạn **bắt buộc** phải cấu hình PX4 dùng card loopback tương ứng:
+   * Chạy mô phỏng lên.
+   * Gõ lệnh sau trong terminal PX4 (`pxh>`):
+     ```bash
+     param set UXRCE_DDS_PTCFG 1
+     ```
+   * Tắt đi và chạy lại mô phỏng.
+
+3. **Kiểm tra trạng thái Client trên PX4**:
+   Gõ lệnh sau trong terminal PX4 (`pxh>`) để kiểm tra tình trạng kết nối:
+   ```bash
+   uxrce_dds_client status
+   ```
+
+### Không tìm thấy World file
+Nếu PX4 báo không tìm thấy file world, hãy thực hiện sync lại Gazebo overlay:
 ```bash
 cd ~/PX4
 rsync -a \
@@ -683,27 +800,23 @@ rsync -a \
   Tools/simulation/gz/
 ```
 
-Nếu landing node chạy nhưng không rời khỏi `INIT`, kiểm tra camera topic:
-
+### Dọn dẹp tiến trình chạy ngầm
+Nếu bạn gặp lỗi `PX4 server already running for instance 0` hoặc xung đột port, hãy tắt hết các tiến trình cũ còn sót:
 ```bash
-ros2 topic hz /gimbal_camera
+pkill -9 -f "gz sim|px4|MicroXRCEAgent|micro-xrce-dds-agent|ros_gz_bridge|aruco_precision_lander|apriltag_precision_lander|rqt_image_view"
 ```
 
+### Lỗi DDS payload / message type
 Nếu ROS 2 báo lỗi DDS payload hoặc message type, package `px4_msgs` của bạn có
 thể không khớp với PX4 checkout. Hãy re-sync hoặc rebuild workspace cung cấp
 `px4_msgs`, rồi rebuild workspace này.
 
+### Ghi chú về cơ chế disarm
 Landing node mặc định không force-disarm. Trong state `LAND`, node gửi PX4
 `NAV_LAND`, dừng stream Offboard setpoint, chờ
 `vehicle_land_detected.landed`, rồi mới gửi lệnh disarm bình thường. Nếu node
 liên tục in `Waiting for PX4 land detector before disarm`, hãy sửa vấn đề land
 detector hoặc altitude/contact trước khi chạy trên phần cứng thật.
-
-Dừng toàn bộ process liên quan:
-
-```bash
-pkill -9 -f "gz sim|px4|MicroXRCEAgent|micro-xrce-dds-agent|ros_gz_bridge|aruco_precision_lander|apriltag_precision_lander|rqt_image_view"
-```
 
 ## Ghi chú
 

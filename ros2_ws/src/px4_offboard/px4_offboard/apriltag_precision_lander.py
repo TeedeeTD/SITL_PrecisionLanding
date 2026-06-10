@@ -103,6 +103,7 @@ class Config:
     FINAL_ALT = 0.10        # m above ground before switching to land mode
     FORCE_DISARM_DELAY = 8.0
     FORCE_DISARM_MAGIC = 21196.0
+    LAND_WAIT_WARN_INTERVAL = 2.0
     ALIGN_TIMEOUT = 45.0
 
     # PX4 precision-landing equivalents. See PX4 PLD_HACC_RAD, PLD_BTOUT,
@@ -142,7 +143,9 @@ class AprilTagPrecisionLander(Node):
         super().__init__('apriltag_precision_lander')
         cfg = Config
         self.declare_parameter('target_tag_id', cfg.TARGET_TAG_ID)
+        self.declare_parameter('allow_force_disarm', False)
         self.target_tag_id = int(self.get_parameter('target_tag_id').value)
+        self.allow_force_disarm = bool(self.get_parameter('allow_force_disarm').value)
         if self.target_tag_id not in cfg.TAG_POSITIONS:
             valid = ', '.join(str(k) for k in sorted(cfg.TAG_POSITIONS))
             raise ValueError(f'target_tag_id must be one of: {valid}')
@@ -201,6 +204,9 @@ class AprilTagPrecisionLander(Node):
         self.armed           = False
         self.offboard_active = False
         self.landed          = True
+        self.ground_contact  = False
+        self.maybe_landed    = False
+        self.at_rest         = False
         self.warmup_count    = 0
 
         # Setpoint (NED)
@@ -240,6 +246,7 @@ class AprilTagPrecisionLander(Node):
         self._land_cmd_time = None
         self._disarm_retry_counter = 0
         self._force_disarm_sent = False
+        self._last_land_wait_log = 0.0
         self._land_recovery_count = 0
         self._allow_known_pad_descent = False
         self._last_search_diag = 0.0
@@ -292,6 +299,9 @@ class AprilTagPrecisionLander(Node):
 
     def _on_land(self, msg: VehicleLandDetected):
         self.landed = msg.landed
+        self.ground_contact = msg.ground_contact
+        self.maybe_landed = msg.maybe_landed
+        self.at_rest = msg.at_rest
 
     def _on_camera(self, msg: Image):
         """Detect selected AprilTag marker and compute pose."""
@@ -402,7 +412,7 @@ class AprilTagPrecisionLander(Node):
         offboard_states = {
             'INIT', 'TAKEOFF', 'GIMBAL_DOWN',
             'SEARCH', 'HORIZONTAL_APPROACH', 'DESCEND_OVER_TARGET',
-            'FINAL_APPROACH', 'TARGET_LOST', 'LAND',
+            'FINAL_APPROACH', 'TARGET_LOST',
         }
 
         if self.state in offboard_states:
@@ -699,7 +709,7 @@ class AprilTagPrecisionLander(Node):
             self.get_logger().warn('Search timed out — repeating required-mode search')
 
     def _state_land(self):
-        """Let PX4 finish touchdown once the vehicle is very close to the pad."""
+        """Let PX4 own touchdown and disarm only after its land detector agrees."""
         cfg = Config
         if self._marker_recent():
             self._update_target_from_vision()
@@ -712,27 +722,40 @@ class AprilTagPrecisionLander(Node):
 
         land_elapsed = time.time() - self._land_cmd_time if self._land_cmd_time else 0.0
         near_ground = self.pos[2] > -(cfg.FINAL_ALT + 0.08)
-        should_disarm = self.landed or (land_elapsed > 3.0 and near_ground)
 
-        if should_disarm and not self.armed:
+        if not self.armed:
             self.get_logger().info('✅ LANDING COMPLETE!')
             self._transition('DONE')
-        elif should_disarm:
+            return
+
+        if self.landed:
             if self._disarm_retry_counter % cfg.CTRL_HZ == 0:
-                if (
-                    not self.landed
-                    and land_elapsed > cfg.FORCE_DISARM_DELAY
-                    and not self._force_disarm_sent
-                ):
-                    self.get_logger().warn(
-                        'PX4 still reports not landed — force disarming at ground height')
-                    self._cmd_force_disarm()
-                    self._force_disarm_sent = True
-                else:
-                    reason = 'land detector' if self.landed else 'low altitude fallback'
-                    self.get_logger().info(f'🛬 Touchdown detected by {reason} — disarming...')
-                    self._cmd_disarm()
+                self.get_logger().info('🛬 PX4 land detector reports landed — disarming...')
+                self._cmd_disarm()
             self._disarm_retry_counter += 1
+            return
+
+        now = time.time()
+        if now - self._last_land_wait_log > cfg.LAND_WAIT_WARN_INTERVAL:
+            self._last_land_wait_log = now
+            self.get_logger().warn(
+                'Waiting for PX4 land detector before disarm: '
+                f'alt={-self.pos[2]:.2f}m, near_ground={near_ground}, '
+                f'ground_contact={self.ground_contact}, maybe_landed={self.maybe_landed}, '
+                f'at_rest={self.at_rest}, elapsed={land_elapsed:.1f}s')
+
+        if (
+            self.allow_force_disarm
+            and land_elapsed > cfg.FORCE_DISARM_DELAY
+            and near_ground
+            and self.ground_contact
+            and self.maybe_landed
+            and not self._force_disarm_sent
+        ):
+            self.get_logger().error(
+                'allow_force_disarm=true: PX4 still reports not landed, sending force disarm')
+            self._cmd_force_disarm()
+            self._force_disarm_sent = True
 
     def _state_done(self):
         """Mission complete"""
@@ -1118,6 +1141,7 @@ class AprilTagPrecisionLander(Node):
             self._target_counter = 0
         elif new_state == 'LAND':
             self._disarm_retry_counter = 0
+            self._last_land_wait_log = 0.0
         self.get_logger().info(f'State: {self.state} → {new_state}')
         self.state = new_state
 
