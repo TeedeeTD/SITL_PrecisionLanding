@@ -20,9 +20,8 @@ setup(
         'console_scripts': [
             'drone_controller = px4_offboard.drone_controller:main',
             'camera_viewer    = px4_offboard.camera_viewer:main',
-            'fractal_aruco_precision_lander = px4_offboard.aruco_precision_lander:fractal_main',
+            'fractal_aruco_precision_lander = px4_offboard.fractal_aruco_precision_lander:main',
             'apriltag_precision_lander = px4_offboard.apriltag_precision_lander:main',
-            'fiducial_detector_node = px4_offboard.fiducial_detector_node:main',
         ],
     },
 )

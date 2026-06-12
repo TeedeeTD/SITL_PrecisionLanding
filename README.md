@@ -50,7 +50,74 @@ Cần có:
 - `ros_gz_image`, `cv_bridge`, `rqt_image_view`.
 - ArUco C++ library có `libaruco.so.3.1`.
 
-Cài package ROS 2 thường dùng:
+### Cài Micro-XRCE-DDS-Agent 2.4.2
+
+Nếu đang dùng bản snap cũ, gỡ trước:
+
+```bash
+sudo snap remove micro-xrce-dds-agent
+```
+
+#### Option A: Build from Source (Recommended)
+
+Building from source is recommended as it avoids sandbox/network restrictions and works reliably with localhost-only configurations:
+
+```bash
+# Clone branch v2.4.2 để tương thích với PX4
+git clone -b v2.4.2 https://github.com/eProsima/Micro-XRCE-DDS-Agent.git
+cd Micro-XRCE-DDS-Agent
+mkdir build && cd build
+cmake ..
+make
+sudo make install
+sudo ldconfig /usr/local/lib/
+```
+
+#### Option B: Build via ROS 2 Workspace (Colcon)
+
+Bypass bằng cách build trong ROS 2 workspace:
+
+```bash
+mkdir -p ~/px4_ros_uxrce_dds_ws/src
+cd ~/px4_ros_uxrce_dds_ws/src
+git clone -b v2.4.2 https://github.com/eProsima/Micro-XRCE-DDS-Agent.git
+
+cd ~/px4_ros_uxrce_dds_ws
+source /opt/ros/humble/setup.bash
+colcon build
+```
+
+Khi chạy agent với Option B, source workspace trước:
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/px4_ros_uxrce_dds_ws/install/local_setup.bash
+MicroXRCEAgent udp4 -p 8888
+```
+#### Option C: Install via Snap (Alternative)
+
+```bash
+
+sudo snap install micro-xrce-dds-agent --classic
+
+```
+
+Once installed, you can start the agent using:
+
+```bash
+
+MicroXRCEAgent udp4 -p 8888
+
+```
+
+or:
+
+```bash
+
+micro-xrce-dds-agent udp4 -p 8888
+```
+
+### Cài package ROS 2 thường dùng
 
 ```bash
 sudo apt update
@@ -132,6 +199,8 @@ PX4_GZ_WORLD=apriltag_landing PX4_GZ_NO_FOLLOW=1 make px4_sitl gz_x500_gimbal
 Terminal 2:
 
 ```bash
+source /opt/ros/humble/setup.bash
+source ~/px4_ros_uxrce_dds_ws/install/local_setup.bash
 MicroXRCEAgent udp4 -p 8888
 ```
 
@@ -186,6 +255,8 @@ PX4_GZ_WORLD=fractal_aruco_landing PX4_GZ_NO_FOLLOW=1 make px4_sitl gz_x500_gimb
 Terminal 2:
 
 ```bash
+source /opt/ros/humble/setup.bash
+source ~/px4_ros_uxrce_dds_ws/install/local_setup.bash
 MicroXRCEAgent udp4 -p 8888
 ```
 
