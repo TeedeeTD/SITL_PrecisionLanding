@@ -324,6 +324,70 @@ pos_enu / target_enu / raw_enu / sp_enu đều là ENU
 
 PX4 `/fmu/in/trajectory_setpoint` vẫn dùng NED theo chuẩn PX4; project chỉ chuyển sang NED ở lớp publisher cuối.
 
+## MAVROS-based Fractal ArUco Landing
+
+Chạy pipeline định vị hạ cánh sử dụng MAVROS thay cho uXRCE-DDS. Pipeline này tự động xoay hệ tọa độ theo góc quay thực tế của drone (`camera_yaw_frame:=body`) và tương thích với Gimbal Manager Protocol V2 của PX4 v1.15+.
+
+Trong chế độ này, mô hình marker được đổi sang kích thước thực tế **0.30m x 0.30m**, do đó tracker và world được cấu hình với kích thước `0.30`.
+
+### Terminal 1: Khởi động PX4 SITL
+```bash
+cd ~/PX4
+PX4_GZ_WORLD=fractal_aruco_landing PX4_GZ_NO_FOLLOW=1 make px4_sitl gz_x500_gimbal
+```
+
+### Terminal 2: Khởi động MAVROS
+```bash
+source /opt/ros/humble/setup.bash
+ros2 launch mavros px4.launch fcu_url:="udp://:14540@127.0.0.1:14580"
+```
+
+### Terminal 3: Khởi động Gazebo Image Bridge
+```bash
+source /opt/ros/humble/setup.bash
+ros2 run ros_gz_image image_bridge \
+  "/world/fractal_aruco_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image" \
+  --ros-args \
+  -r "/world/fractal_aruco_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image:=/gimbal_camera"
+```
+
+### Terminal 4: Khởi động C++ Tracker Node (với use_sim_time:=true)
+```bash
+source /opt/ros/humble/setup.bash
+source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
+ros2 run aruco_fractal_tracker aruco_fractal_tracker --ros-args \
+  -p marker_configuration:=FRACTAL_5L_6 \
+  -p marker_size:=0.30 \
+  -p show_latency_overlay:=true \
+  -p latency_warn_ms:=100.0 \
+  -p use_sim_time:=true \
+  -r image_input_topic:=/gimbal_camera \
+  -r camera_info_topic:=/gimbal_camera/camera_info \
+  -r image_output_topic:=/landing/annotated_image \
+  -r poses_output_topic:=/aruco_fractal_tracker/poses
+```
+
+### Terminal 5: Khởi động MAVROS-based Lander Node (với use_sim_time:=true)
+```bash
+source /opt/ros/humble/setup.bash
+source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
+ros2 run px4_offboard fractal_aruco_precision_lander --ros-args \
+  -p search_frame:=enu \
+  -p search_x:=3.0 \
+  -p search_y:=2.0 \
+  -p cruise_alt:=5.0 \
+  -p camera_yaw_frame:=body \
+  -p camera_x_to_body_east_sign:=1.0 \
+  -p camera_y_to_body_north_sign:=-1.0 \
+  -p use_sim_time:=true \
+  -p pose_topic:=/aruco_fractal_tracker/poses
+```
+
+### Xem và Giám Sát:
+- **Ảnh Annotated camera & Latency:** Mở `ros2 run rqt_image_view rqt_image_view` và chọn topic `/landing/annotated_image`.
+- **Tần số setpoint:** `ros2 topic hz /mavros/setpoint_position/local` (phải đạt ~20 Hz trong khi bay Offboard).
+- **Trạng thái MAVROS:** `ros2 topic echo --once /mavros/state`
+
 ## Xem Camera
 
 ```bash
