@@ -2,8 +2,8 @@
 
 Project này chứa hai pipeline hạ cánh chính xác cho PX4 Gazebo `x500_gimbal`:
 
-- **AprilTag landing**: dùng OpenCV AprilTag detector trong node Python.
-- **Fractal ArUco landing**: dùng C++ `aruco_fractal_tracker` với marker `FRACTAL_5L_6`, publish pose sang node điều khiển ENU.
+- **AprilTag landing**: dùng OpenCV AprilTag detector trong node Python (chạy trên nền uXRCE-DDS).
+- **Fractal ArUco landing**: dùng C++ `aruco_fractal_tracker` với marker `FRACTAL_5L_6`, và điều khiển hạ cánh chính xác qua **MAVROS** (hệ tọa độ ENU, hỗ trợ Gimbal Manager V2).
 
 ## Cấu Trúc
 
@@ -224,109 +224,9 @@ source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
 ros2 run px4_offboard apriltag_precision_lander --ros-args -p target_tag_id:=0
 ```
 
-## Fractal ArUco Landing
+## Fractal ArUco Landing (MAVROS-based)
 
-Pipeline:
-
-```text
-Gazebo camera
--> /gimbal_camera
--> aruco_fractal_tracker
--> /landing/annotated_image
--> /aruco_fractal_tracker/poses
--> fractal_aruco_precision_lander
--> PX4 Offboard
--> PX4 LAND
-```
-
-World `fractal_aruco_landing` dùng model `fractal_aruco_marker` kích thước **1.0m x 1.0m**, vì vậy tracker phải chạy với:
-
-```bash
--p marker_size:=1.0
-```
-
-Terminal 1:
-
-```bash
-cd ~/PX4
-PX4_GZ_WORLD=fractal_aruco_landing PX4_GZ_NO_FOLLOW=1 make px4_sitl gz_x500_gimbal
-```
-
-Terminal 2:
-
-```bash
-source /opt/ros/humble/setup.bash
-source ~/px4_ros_uxrce_dds_ws/install/local_setup.bash
-MicroXRCEAgent udp4 -p 8888
-```
-
-Terminal 3:
-
-```bash
-source /opt/ros/humble/setup.bash
-
-ros2 run ros_gz_image image_bridge \
-  "/world/fractal_aruco_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image" \
-  --ros-args \
-  -r "/world/fractal_aruco_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image:=/gimbal_camera"
-```
-
-Terminal 4:
-
-```bash
-source /opt/ros/humble/setup.bash
-source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
-
-ros2 run aruco_fractal_tracker aruco_fractal_tracker --ros-args \
-  -p marker_configuration:=FRACTAL_5L_6 \
-  -p marker_size:=1.0 \
-  -p show_latency_overlay:=true \
-  -p latency_warn_ms:=100.0 \
-  -r image_input_topic:=/gimbal_camera \
-  -r camera_info_topic:=/gimbal_camera/camera_info \
-  -r image_output_topic:=/landing/annotated_image \
-  -r poses_output_topic:=/aruco_fractal_tracker/poses
-```
-
-`No fractal marker yet` là bình thường trước khi UAV tới pad và gimbal nhìn xuống.
-
-Hai dòng ở góc dưới ảnh `/landing/annotated_image` hiển thị:
-
-- `Camera -> tracker`: tuổi của frame dựa trên timestamp camera.
-- `Detector processing`: thời gian xử lý callback C++.
-
-Nếu hiện `N/A (clock mismatch)`, timestamp camera và clock của tracker không
-cùng miền thời gian; không được dùng giá trị đó làm minh chứng latency.
-
-Terminal 5:
-
-```bash
-source /opt/ros/humble/setup.bash
-source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
-
-ros2 run px4_offboard fractal_aruco_precision_lander --ros-args \
-  -p search_frame:=enu \
-  -p search_x:=3.0 \
-  -p search_y:=2.0 \
-  -p camera_yaw_frame:=local \
-  -p camera_x_to_body_east_sign:=1.0 \
-  -p camera_y_to_body_north_sign:=-1.0 \
-  -p pose_topic:=/aruco_fractal_tracker/poses
-```
-
-Controller dùng ENU cho logic hạ cánh:
-
-```text
-search_x = East
-search_y = North
-pos_enu / target_enu / raw_enu / sp_enu đều là ENU
-```
-
-PX4 `/fmu/in/trajectory_setpoint` vẫn dùng NED theo chuẩn PX4; project chỉ chuyển sang NED ở lớp publisher cuối.
-
-## MAVROS-based Fractal ArUco Landing
-
-Chạy pipeline định vị hạ cánh sử dụng MAVROS thay cho uXRCE-DDS. Pipeline này tự động xoay hệ tọa độ theo góc quay thực tế của drone (`camera_yaw_frame:=body`) và tương thích với Gimbal Manager Protocol V2 của PX4 v1.15+.
+Pipeline định vị hạ cánh chính xác sử dụng MAVROS thay cho uXRCE-DDS. Pipeline này tự động xoay hệ tọa độ theo góc quay thực tế của drone (`camera_yaw_frame:=body`) và tương thích với Gimbal Manager Protocol V2 của PX4 v1.15+.
 
 Trong chế độ này, mô hình marker được đổi sang kích thước thực tế **0.30m x 0.30m**, do đó tracker và world được cấu hình với kích thước `0.30`.
 
@@ -381,6 +281,14 @@ ros2 run px4_offboard fractal_aruco_precision_lander --ros-args \
   -p camera_y_to_body_north_sign:=-1.0 \
   -p use_sim_time:=true \
   -p pose_topic:=/aruco_fractal_tracker/poses
+```
+
+Controller dùng ENU cho logic hạ cánh:
+
+```text
+search_x = East
+search_y = North
+pos_enu / target_enu / raw_enu / sp_enu đều là ENU
 ```
 
 ### Xem và Giám Sát:
