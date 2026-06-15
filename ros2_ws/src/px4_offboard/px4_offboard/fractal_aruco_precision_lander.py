@@ -32,6 +32,10 @@ class FractalConfig:
     FINAL_ALT = 0.30
     LANDING_TARGET_Z = 0.0
 
+    # Camera physical offsets relative to drone center (body FLU frame)
+    CAMERA_OFFSET_X = 0.1517
+    CAMERA_OFFSET_Y = 0.0
+
     # Timing
     CTRL_HZ = 20
     WARMUP_SEC = 2.0
@@ -206,6 +210,8 @@ class FractalArucoPrecisionLander(Node):
         self.declare_parameter("camera_x_to_body_east_sign", cfg.CAMERA_X_TO_ENU_EAST_SIGN)
         self.declare_parameter("camera_y_to_body_north_sign", cfg.CAMERA_Y_TO_ENU_NORTH_SIGN)
         self.declare_parameter("camera_yaw_frame", cfg.CAMERA_YAW_FRAME)
+        self.declare_parameter("camera_offset_x", cfg.CAMERA_OFFSET_X)
+        self.declare_parameter("camera_offset_y", cfg.CAMERA_OFFSET_Y)
 
         self.declare_parameter("final_alt", cfg.FINAL_ALT)
         self.declare_parameter("descent_rate", cfg.DESCENT_RATE)
@@ -267,6 +273,8 @@ class FractalArucoPrecisionLander(Node):
         self.camera_yaw_frame = str(self.get_parameter("camera_yaw_frame").value).strip().lower()
         if self.camera_yaw_frame not in ("local", "body"):
             raise ValueError("camera_yaw_frame must be 'local' or 'body'")
+        self.camera_offset_x = float(self.get_parameter("camera_offset_x").value)
+        self.camera_offset_y = float(self.get_parameter("camera_offset_y").value)
 
         self.search_frame = str(self.get_parameter("search_frame").value).strip().lower()
         self.search_input_xy = np.array(
@@ -953,8 +961,9 @@ class FractalArucoPrecisionLander(Node):
         east_body = float(camera_xy[0])
         north_body = float(camera_xy[1])
 
-        x_body = north_body
-        y_body = -east_body
+        # Target position relative to drone center in body FLU (Forward-Left-Up)
+        x_body = north_body + self.camera_offset_x
+        y_body = -east_body + self.camera_offset_y
 
         c = math.cos(yaw)
         s = math.sin(yaw)

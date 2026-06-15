@@ -236,56 +236,12 @@ cd ~/PX4
 PX4_GZ_WORLD=fractal_aruco_landing PX4_GZ_NO_FOLLOW=1 make px4_sitl gz_x500_gimbal
 ```
 
-### Terminal 2: Khởi động MAVROS
-```bash
-source /opt/ros/humble/setup.bash
-ros2 launch mavros px4.launch fcu_url:="udp://:14540@127.0.0.1:14580"
-```
-
-### Terminal 3: Khởi động Gazebo Image & Clock Bridge
-```bash
-source /opt/ros/humble/setup.bash
-
-# Chạy Image Bridge (ở background)
-ros2 run ros_gz_image image_bridge \
-  "/world/fractal_aruco_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image" \
-  --ros-args \
-  -r "/world/fractal_aruco_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image:=/gimbal_camera" &
-
-# Chạy Clock Bridge (để đồng bộ time)
-ros2 run ros_gz_bridge parameter_bridge /clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock
-```
-
-### Terminal 4: Khởi động C++ Tracker Node (với use_sim_time:=true)
+### Terminal 2: Khởi động toàn bộ cụm ROS 2 Nodes (Unified Launch File)
+Chạy lệnh duy nhất để khởi động đồng thời MAVROS, các Gazebo bridges (image và clock), C++ Tracker, và Python Lander:
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
-ros2 run aruco_fractal_tracker aruco_fractal_tracker --ros-args \
-  -p marker_configuration:=FRACTAL_5L_6 \
-  -p marker_size:=0.30 \
-  -p show_latency_overlay:=true \
-  -p latency_warn_ms:=100.0 \
-  -p use_sim_time:=true \
-  -r image_input_topic:=/gimbal_camera \
-  -r camera_info_topic:=/gimbal_camera/camera_info \
-  -r image_output_topic:=/landing/annotated_image \
-  -r poses_output_topic:=/aruco_fractal_tracker/poses
-```
-
-### Terminal 5: Khởi động MAVROS-based Lander Node (với use_sim_time:=true)
-```bash
-source /opt/ros/humble/setup.bash
-source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
-ros2 run px4_offboard fractal_aruco_precision_lander --ros-args \
-  -p search_frame:=enu \
-  -p search_x:=3.0 \
-  -p search_y:=2.0 \
-  -p cruise_alt:=5.0 \
-  -p camera_yaw_frame:=body \
-  -p camera_x_to_body_east_sign:=1.0 \
-  -p camera_y_to_body_north_sign:=-1.0 \
-  -p use_sim_time:=true \
-  -p pose_topic:=/aruco_fractal_tracker/poses
+ros2 launch px4_offboard fractal_aruco_landing.launch.py
 ```
 
 Controller dùng ENU cho logic hạ cánh:

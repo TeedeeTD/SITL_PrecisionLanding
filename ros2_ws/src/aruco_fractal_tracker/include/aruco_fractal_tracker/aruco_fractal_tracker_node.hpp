@@ -60,6 +60,10 @@ private:
   rclcpp::Time last_pose_log_;
   rclcpp::Time last_pose_failed_log_;
   rclcpp::Time last_latency_log_;
+  std::string last_detected_ids_str_{"None"};
+  double current_fps_{0.0};
+  rclcpp::Time last_fps_time_;
+  size_t fps_frame_count_{0};
 
   void imageCallback(const sensor_msgs::msg::Image::SharedPtr msg);
   void cameraInfoCallback(const sensor_msgs::msg::CameraInfo::SharedPtr msg);
