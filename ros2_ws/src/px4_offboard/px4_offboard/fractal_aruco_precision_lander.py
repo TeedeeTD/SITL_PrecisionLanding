@@ -34,7 +34,7 @@ from px4_msgs.msg import (
 
 class FractalConfig:
     # Flight geometry
-    CRUISE_ALT = 18.0
+    CRUISE_ALT = 15.0
     SEARCH_FRAME = "enu"
     SEARCH_ENU = (3.0, 2.0)
     FINAL_ALT = 0.30

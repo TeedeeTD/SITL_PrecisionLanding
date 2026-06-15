@@ -8,6 +8,11 @@ search_frame.png
 # External dependencies (clone separately)
 ros2_ws/src/px4_msgs/
 
+# Keep local project documents private; publish only the two approved images.
+docs/*
+!docs/marker.png
+!docs/apriltag_fsm.png
+
 # Python cache
 __pycache__/
 *.pyc

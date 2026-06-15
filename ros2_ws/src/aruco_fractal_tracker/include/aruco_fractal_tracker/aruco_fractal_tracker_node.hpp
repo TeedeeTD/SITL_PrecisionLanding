@@ -25,6 +25,7 @@
 #include <tf2_ros/transform_broadcaster.h>
 
 #include <aruco/fractaldetector.h>
+#include <chrono>
 #include <memory>
 
 namespace fractal_tracker
@@ -48,14 +49,21 @@ private:
   bool camera_info_initialized_{false};
 
   double marker_size_;
+  bool show_latency_overlay_{true};
+  double latency_warn_ms_{100.0};
   size_t frame_count_{0};
   size_t detection_count_{0};
+  double last_processing_latency_ms_{0.0};
+  double last_source_latency_ms_{0.0};
+  bool source_latency_valid_{false};
   rclcpp::Time last_no_detection_log_;
   rclcpp::Time last_pose_log_;
   rclcpp::Time last_pose_failed_log_;
+  rclcpp::Time last_latency_log_;
 
   void imageCallback(const sensor_msgs::msg::Image::SharedPtr msg);
   void cameraInfoCallback(const sensor_msgs::msg::CameraInfo::SharedPtr msg);
+  void drawLatencyOverlay(cv::Mat& image) const;
 }; // class ArucoFractalTracker
 }  // namespace fractal_tracker
 

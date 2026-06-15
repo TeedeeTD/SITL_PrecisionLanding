@@ -19,6 +19,7 @@
 
 #include <stdexcept>
 #include <string>
+#include <chrono>
 #include <cv_bridge/cv_bridge.h>
 #include <opencv2/opencv.hpp>
 #include <tf2/LinearMath/Matrix3x3.h>
@@ -32,9 +33,13 @@ ArucoFractalTracker::ArucoFractalTracker(const rclcpp::NodeOptions &options)
 {
   this->declare_parameter<std::string>("marker_configuration", "");
   this->declare_parameter<double>("marker_size", 0.0);
+  this->declare_parameter<bool>("show_latency_overlay", true);
+  this->declare_parameter<double>("latency_warn_ms", 100.0);
 
   auto marker_configuration = this->get_parameter("marker_configuration").get_value<std::string>();
   marker_size_ = this->get_parameter("marker_size").get_value<double>();
+  show_latency_overlay_ = this->get_parameter("show_latency_overlay").as_bool();
+  latency_warn_ms_ = this->get_parameter("latency_warn_ms").as_double();
   
   detector_.setConfiguration(marker_configuration);
 
@@ -65,11 +70,14 @@ ArucoFractalTracker::ArucoFractalTracker(const rclcpp::NodeOptions &options)
   last_no_detection_log_ = this->get_clock()->now();
   last_pose_log_ = this->get_clock()->now();
   last_pose_failed_log_ = this->get_clock()->now();
+  last_latency_log_ = this->get_clock()->now();
 
   RCLCPP_INFO(
     this->get_logger(),
-    "ArucoFractalTracker ready: marker_configuration=%s marker_size=%.3f",
-    marker_configuration.c_str(), marker_size_);
+    "ArucoFractalTracker ready: marker_configuration=%s marker_size=%.3f "
+    "latency_overlay=%s warn=%.1fms",
+    marker_configuration.c_str(), marker_size_,
+    show_latency_overlay_ ? "on" : "off", latency_warn_ms_);
   RCLCPP_INFO(
     this->get_logger(),
     "Topics before remap: image_input_topic -> image_output_topic, poses_output_topic; "
@@ -156,6 +164,7 @@ void ArucoFractalTracker::cameraInfoCallback(const sensor_msgs::msg::CameraInfo:
 
 void ArucoFractalTracker::imageCallback(const sensor_msgs::msg::Image::SharedPtr msg)
 {
+  const auto callback_start = std::chrono::steady_clock::now();
   cv_bridge::CvImagePtr cv_ptr;
   cv::Mat gray;
   ++frame_count_;
@@ -202,7 +211,7 @@ void ArucoFractalTracker::imageCallback(const sensor_msgs::msg::Image::SharedPtr
 
       geometry_msgs::msg::PoseStamped pose;
       pose.header.frame_id = msg->header.frame_id;
-      pose.header.stamp = this->get_clock()->now();
+      pose.header.stamp = msg->header.stamp;
       pose.pose.position.x = tf2_translation.x();
       pose.pose.position.y = tf2_translation.y();
       pose.pose.position.z = tf2_translation.z();
@@ -261,7 +270,7 @@ void ArucoFractalTracker::imageCallback(const sensor_msgs::msg::Image::SharedPtr
       cv::putText(cv_ptr->image, cv::format("W=%.2f", quat.getW()), ori_text_pos, font_face, font_scale, cv::Scalar(0, 0, 0), 1, cv::LINE_AA);
 
       geometry_msgs::msg::TransformStamped transform;
-      transform.header.stamp = this->get_clock()->now();
+      transform.header.stamp = msg->header.stamp;
       transform.header.frame_id = msg->header.frame_id;
       transform.child_frame_id = "marker_frame";
       transform.transform.translation.x = tf2_translation.x();
@@ -300,6 +309,48 @@ void ArucoFractalTracker::imageCallback(const sensor_msgs::msg::Image::SharedPtr
     cv::putText(cv_ptr->image, "NOT FOUND", cv::Point(20, 30), cv::FONT_HERSHEY_PLAIN, 1, cv::Scalar(0, 0, 0), 1, cv::LINE_AA);
   }
 
+  const auto callback_end = std::chrono::steady_clock::now();
+  last_processing_latency_ms_ =
+    std::chrono::duration<double, std::milli>(callback_end - callback_start).count();
+
+  source_latency_valid_ = false;
+  const rclcpp::Time input_stamp(msg->header.stamp, this->get_clock()->get_clock_type());
+  if (input_stamp.nanoseconds() > 0)
+  {
+    const double source_latency_ms = (this->get_clock()->now() - input_stamp).seconds() * 1000.0;
+    // Reject incompatible clock domains instead of displaying a misleading value.
+    if (source_latency_ms >= -1.0 && source_latency_ms < 60000.0)
+    {
+      last_source_latency_ms_ = source_latency_ms;
+      source_latency_valid_ = true;
+    }
+  }
+
+  if (show_latency_overlay_)
+  {
+    drawLatencyOverlay(cv_ptr->image);
+  }
+
+  if ((now - last_latency_log_).seconds() >= 1.0)
+  {
+    if (source_latency_valid_)
+    {
+      RCLCPP_INFO(
+        this->get_logger(),
+        "Tracker latency: source_to_tracker=%.1fms processing=%.1fms threshold=%.1fms",
+        last_source_latency_ms_, last_processing_latency_ms_, latency_warn_ms_);
+    }
+    else
+    {
+      RCLCPP_WARN(
+        this->get_logger(),
+        "Tracker latency: source_to_tracker=N/A (camera and node clocks differ), "
+        "processing=%.1fms",
+        last_processing_latency_ms_);
+    }
+    last_latency_log_ = now;
+  }
+
   try 
   {
     image_pub_->publish(*cv_ptr->toImageMsg());
@@ -309,6 +360,50 @@ void ArucoFractalTracker::imageCallback(const sensor_msgs::msg::Image::SharedPtr
     RCLCPP_ERROR_STREAM(this->get_logger(), "cv_bridge exception: " << e.what());
     return;
   }
+}
+
+void ArucoFractalTracker::drawLatencyOverlay(cv::Mat& image) const
+{
+  const int font_face = cv::FONT_HERSHEY_SIMPLEX;
+  const double font_scale = 0.55;
+  const int thickness = 1;
+  const int margin = 10;
+  const int line_height = 22;
+  const int panel_height = 2 * line_height + 12;
+  const int panel_top = std::max(0, image.rows - panel_height - margin);
+  const int panel_right = std::min(image.cols - margin, 510);
+
+  cv::rectangle(
+    image, cv::Point(margin, panel_top), cv::Point(panel_right, image.rows - margin),
+    cv::Scalar(0, 0, 0), cv::FILLED);
+
+  const cv::Scalar processing_color =
+    last_processing_latency_ms_ <= latency_warn_ms_
+    ? cv::Scalar(80, 220, 80)
+    : cv::Scalar(0, 80, 255);
+  cv::putText(
+    image,
+    cv::format(
+      "Detector processing: %.1f ms  [%s]",
+      last_processing_latency_ms_,
+      last_processing_latency_ms_ <= latency_warn_ms_ ? "PASS" : "WARN"),
+    cv::Point(margin + 8, panel_top + line_height),
+    font_face, font_scale, processing_color, thickness, cv::LINE_AA);
+
+  const std::string source_text = source_latency_valid_
+    ? cv::format(
+        "Camera -> tracker: %.1f ms  [%s]",
+        last_source_latency_ms_,
+        last_source_latency_ms_ <= latency_warn_ms_ ? "PASS" : "WARN")
+    : "Camera -> tracker: N/A (clock mismatch)";
+  const cv::Scalar source_color = !source_latency_valid_
+    ? cv::Scalar(0, 200, 255)
+    : (last_source_latency_ms_ <= latency_warn_ms_
+        ? cv::Scalar(80, 220, 80)
+        : cv::Scalar(0, 80, 255));
+  cv::putText(
+    image, source_text, cv::Point(margin + 8, panel_top + 2 * line_height),
+    font_face, font_scale, source_color, thickness, cv::LINE_AA);
 }
 
 } // namespace fractal_tracker

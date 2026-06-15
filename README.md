@@ -280,6 +280,8 @@ source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
 ros2 run aruco_fractal_tracker aruco_fractal_tracker --ros-args \
   -p marker_configuration:=FRACTAL_5L_6 \
   -p marker_size:=1.0 \
+  -p show_latency_overlay:=true \
+  -p latency_warn_ms:=100.0 \
   -r image_input_topic:=/gimbal_camera \
   -r camera_info_topic:=/gimbal_camera/camera_info \
   -r image_output_topic:=/landing/annotated_image \
@@ -287,6 +289,14 @@ ros2 run aruco_fractal_tracker aruco_fractal_tracker --ros-args \
 ```
 
 `No fractal marker yet` là bình thường trước khi UAV tới pad và gimbal nhìn xuống.
+
+Hai dòng ở góc dưới ảnh `/landing/annotated_image` hiển thị:
+
+- `Camera -> tracker`: tuổi của frame dựa trên timestamp camera.
+- `Detector processing`: thời gian xử lý callback C++.
+
+Nếu hiện `N/A (clock mismatch)`, timestamp camera và clock của tracker không
+cùng miền thời gian; không được dùng giá trị đó làm minh chứng latency.
 
 Terminal 5:
 

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Detect ArUco fiducials and publish camera-frame 6D landing targets."""
+"""Detect ArUco fiducials and publish camera-frame 6D landing targets.
+
+The node also publishes an annotated image so Step 0 nested-marker tests can be
+inspected in rqt_image_view without coupling the detector to the landing FSM.
+"""
 
 from __future__ import annotations
 
@@ -111,7 +115,7 @@ def estimate_marker_pose(
     marker_size_m: float,
     cam_mtx: np.ndarray,
     dist_coeffs: np.ndarray,
-) -> Tuple[np.ndarray, Tuple[float, float, float]]:
+) -> Tuple[np.ndarray, np.ndarray, Tuple[float, float, float]]:
     half = marker_size_m / 2.0
     object_points = np.array(
         [
@@ -134,7 +138,7 @@ def estimate_marker_pose(
         raise RuntimeError("solvePnP failed for detected ArUco marker")
 
     rotation, _ = cv2.Rodrigues(rvec)
-    return tvec.reshape(3), rotation_matrix_to_rpy(rotation)
+    return tvec.reshape(3), rvec.reshape(3), rotation_matrix_to_rpy(rotation)
 
 
 def detect_fiducials(
@@ -146,6 +150,24 @@ def detect_fiducials(
     fallback_marker_size_m: float,
 ) -> List[dict]:
     corners, ids, _ = detector.detectMarkers(gray)
+    return fiducials_from_markers(
+        corners,
+        ids,
+        cam_mtx,
+        dist_coeffs,
+        marker_size_by_id,
+        fallback_marker_size_m,
+    )
+
+
+def fiducials_from_markers(
+    corners: List[np.ndarray],
+    ids: np.ndarray,
+    cam_mtx: np.ndarray,
+    dist_coeffs: np.ndarray,
+    marker_size_by_id: Dict[int, float],
+    fallback_marker_size_m: float,
+) -> List[dict]:
     if ids is None:
         return []
 
@@ -153,11 +175,14 @@ def detect_fiducials(
     for marker_corners, marker_id_raw in zip(corners, ids.flatten()):
         marker_id = int(marker_id_raw)
         marker_size_m = marker_size_by_id.get(marker_id, fallback_marker_size_m)
-        tvec, rpy = estimate_marker_pose(marker_corners, marker_size_m, cam_mtx, dist_coeffs)
+        tvec, rvec, rpy = estimate_marker_pose(marker_corners, marker_size_m, cam_mtx, dist_coeffs)
         targets.append(
             {
                 "tag_id": marker_id,
                 "size_m": marker_size_m,
+                "corners": marker_corners,
+                "rvec": rvec,
+                "tvec": tvec,
                 "x": float(tvec[0]),
                 "y": float(tvec[1]),
                 "z": float(tvec[2]),
@@ -171,12 +196,89 @@ def detect_fiducials(
     return targets
 
 
+def marker_center(marker_corners: np.ndarray) -> Tuple[int, int]:
+    pts = marker_corners.reshape(-1, 2)
+    return int(np.mean(pts[:, 0])), int(np.mean(pts[:, 1]))
+
+
+def marker_color(marker_id: int) -> Tuple[int, int, int]:
+    colors = {
+        10: (255, 180, 0),
+        11: (0, 255, 255),
+        12: (0, 255, 0),
+    }
+    return colors.get(marker_id, (255, 255, 255))
+
+
+def annotate_frame(
+    frame: np.ndarray,
+    targets: List[dict],
+    corners: List[np.ndarray],
+    ids: np.ndarray,
+    rejected_count: int,
+    cam_mtx: np.ndarray,
+    dist_coeffs: np.ndarray,
+) -> np.ndarray:
+    annotated = frame.copy()
+    if ids is not None:
+        aruco.drawDetectedMarkers(annotated, corners, ids)
+
+    for target in targets:
+        marker_id = int(target["tag_id"])
+        cx, cy = marker_center(target["corners"])
+        color = marker_color(marker_id)
+        label = (
+            f"ID {marker_id} size={target['size_m']:.2f}m "
+            f"xyz=({target['x']:.2f},{target['y']:.2f},{target['z']:.2f})"
+        )
+        cv2.circle(annotated, (cx, cy), 5, color, -1)
+        cv2.putText(
+            annotated,
+            label,
+            (cx + 8, max(24, cy - 10)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
+        try:
+            axis_len = max(0.03, float(target["size_m"]) * 0.5)
+            cv2.drawFrameAxes(
+                annotated,
+                cam_mtx,
+                dist_coeffs,
+                target["rvec"].reshape(3, 1),
+                target["tvec"].reshape(3, 1),
+                axis_len,
+            )
+        except Exception:
+            pass
+
+    detected_ids = [] if ids is None else ids.flatten().astype(int).tolist()
+    status = f"Detected IDs: {detected_ids if detected_ids else 'none'} | rejected: {rejected_count}"
+    cv2.rectangle(annotated, (8, 8), (760, 44), (0, 0, 0), -1)
+    cv2.putText(
+        annotated,
+        status,
+        (18, 33),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (0, 255, 0) if detected_ids else (0, 220, 255),
+        2,
+        cv2.LINE_AA,
+    )
+    return annotated
+
+
 class FiducialDetectorNode(Node):
     def __init__(self):
         super().__init__("fiducial_detector_node")
 
         self.declare_parameter("image_topic", "/gimbal_camera")
         self.declare_parameter("output_topic", "/landing/targets_camera")
+        self.declare_parameter("annotated_image_topic", "/landing/annotated_image")
+        self.declare_parameter("publish_annotated_image", True)
         self.declare_parameter("camera_frame", "camera_link")
         self.declare_parameter("dictionary", "DICT_4X4_50")
         self.declare_parameter("marker_size_m", 1.0)
@@ -188,6 +290,8 @@ class FiducialDetectorNode(Node):
 
         image_topic = str(self.get_parameter("image_topic").value)
         output_topic = str(self.get_parameter("output_topic").value)
+        annotated_image_topic = str(self.get_parameter("annotated_image_topic").value)
+        self.publish_annotated_image = bool(self.get_parameter("publish_annotated_image").value)
         self.camera_frame = str(self.get_parameter("camera_frame").value)
         dictionary_name = str(self.get_parameter("dictionary").value)
         self.fallback_marker_size_m = float(self.get_parameter("marker_size_m").value)
@@ -208,10 +312,14 @@ class FiducialDetectorNode(Node):
         self.bridge = CvBridge()
 
         self.publisher = self.create_publisher(LandingTarget6DArray, output_topic, 10)
+        self.annotated_image_publisher = None
+        if self.publish_annotated_image:
+            self.annotated_image_publisher = self.create_publisher(Image, annotated_image_topic, 10)
         self.create_subscription(Image, image_topic, self._on_image, 10)
 
         self.get_logger().info(
             f"Fiducial detector ready: image={image_topic}, output={output_topic}, "
+            f"annotated={annotated_image_topic if self.publish_annotated_image else 'disabled'}, "
             f"dictionary={dictionary_name}, marker_sizes={self.marker_size_by_id}"
         )
 
@@ -223,9 +331,10 @@ class FiducialDetectorNode(Node):
         try:
             frame = self.bridge.imgmsg_to_cv2(msg, "bgr8")
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            detections = detect_fiducials(
-                gray,
-                self.detector,
+            corners, ids, rejected = self.detector.detectMarkers(gray)
+            detections = fiducials_from_markers(
+                corners,
+                ids,
                 self.cam_mtx,
                 self.dist_coeffs,
                 self.marker_size_by_id,
@@ -235,6 +344,21 @@ class FiducialDetectorNode(Node):
             self.get_logger().warn(f"fiducial detection failed: {exc}", throttle_duration_sec=2.0)
             self.publisher.publish(output)
             return
+
+        if self.annotated_image_publisher is not None:
+            annotated = annotate_frame(
+                frame,
+                detections,
+                corners,
+                ids,
+                len(rejected),
+                self.cam_mtx,
+                self.dist_coeffs,
+            )
+            annotated_msg = self.bridge.cv2_to_imgmsg(annotated, encoding="bgr8")
+            annotated_msg.header = msg.header
+            annotated_msg.header.frame_id = self.camera_frame
+            self.annotated_image_publisher.publish(annotated_msg)
 
         for detection in detections:
             target = LandingTarget6D()
