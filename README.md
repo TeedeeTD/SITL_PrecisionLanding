@@ -242,13 +242,18 @@ source /opt/ros/humble/setup.bash
 ros2 launch mavros px4.launch fcu_url:="udp://:14540@127.0.0.1:14580"
 ```
 
-### Terminal 3: Khởi động Gazebo Image Bridge
+### Terminal 3: Khởi động Gazebo Image & Clock Bridge
 ```bash
 source /opt/ros/humble/setup.bash
+
+# Chạy Image Bridge (ở background)
 ros2 run ros_gz_image image_bridge \
   "/world/fractal_aruco_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image" \
   --ros-args \
-  -r "/world/fractal_aruco_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image:=/gimbal_camera"
+  -r "/world/fractal_aruco_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image:=/gimbal_camera" &
+
+# Chạy Clock Bridge (để đồng bộ time)
+ros2 run ros_gz_bridge parameter_bridge /clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock
 ```
 
 ### Terminal 4: Khởi động C++ Tracker Node (với use_sim_time:=true)
