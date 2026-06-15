@@ -22,6 +22,7 @@
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <tf2_ros/transform_broadcaster.h>
 
 #include <aruco/fractaldetector.h>
@@ -40,15 +41,23 @@ private:
 
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
   rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr uav_pose_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr lander_state_sub_;
 
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr marker_pose_pub_;
   std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
+  geometry_msgs::msg::PoseStamped::SharedPtr last_uav_pose_;
+
   sensor_msgs::msg::CameraInfo last_camera_info_;
   bool camera_info_initialized_{false};
 
   double marker_size_;
+  double camera_x_to_east_sign_{-1.0};
+  double camera_y_to_north_sign_{1.0};
+  double camera_offset_x_{0.1517};
+  double camera_offset_y_{0.0};
   bool show_latency_overlay_{true};
   double latency_warn_ms_{100.0};
   size_t frame_count_{0};
@@ -61,6 +70,7 @@ private:
   rclcpp::Time last_pose_failed_log_;
   rclcpp::Time last_latency_log_;
   std::string last_detected_ids_str_{"None"};
+  std::string last_lander_state_{"UNKNOWN"};
   double current_fps_{0.0};
   rclcpp::Time last_fps_time_;
   size_t fps_frame_count_{0};

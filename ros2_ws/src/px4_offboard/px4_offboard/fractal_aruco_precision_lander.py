@@ -17,6 +17,7 @@ from typing import Deque, Optional, Tuple
 import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseStamped
+from std_msgs.msg import String
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 
@@ -61,17 +62,17 @@ class FractalConfig:
     POSE_ALPHA_LOW_ALT = 0.45
 
     # Dynamic acceptance gates.
-    ALIGN_RADIUS_MIN = 0.35
-    ALIGN_RADIUS_MAX = 1.80
+    ALIGN_RADIUS_MIN = 0.50
+    ALIGN_RADIUS_MAX = 2.50
     ALIGN_RADIUS_ALT_GAIN = 0.11
     ALIGN_RADIUS_BIAS = 0.15
-    DESCENT_RADIUS_MIN = 0.55
-    DESCENT_RADIUS_MAX = 2.20
+    DESCENT_RADIUS_MIN = 0.80
+    DESCENT_RADIUS_MAX = 3.00
     DESCENT_RADIUS_ALT_GAIN = 0.14
     DESCENT_RADIUS_BIAS = 0.20
-    POSE_REJECT_RADIUS_MIN = 2.50
-    POSE_REJECT_RADIUS_MAX = 4.00
-    POSE_REJECT_RADIUS_ALT_GAIN = 0.20
+    POSE_REJECT_RADIUS_MIN = 6.00
+    POSE_REJECT_RADIUS_MAX = 10.00
+    POSE_REJECT_RADIUS_ALT_GAIN = 0.45
 
     # Tracker pose axes.
     CAMERA_X_TO_ENU_EAST_SIGN = 1.0
@@ -113,6 +114,9 @@ class FractalArucoPrecisionLander(Node):
         )
         self.pub_landing_target = self.create_publisher(
             LandingTarget, "/mavros/landing_target/raw", 10
+        )
+        self.pub_state = self.create_publisher(
+            String, "/lander/state", 10
         )
 
         # Subscribers
@@ -389,6 +393,13 @@ class FractalArucoPrecisionLander(Node):
         if self.state in offboard_states:
             self._pub_setpoint()
 
+        try:
+            state_msg = String()
+            state_msg.data = self.state
+            self.pub_state.publish(state_msg)
+        except Exception:
+            pass
+
     def _state_init(self) -> None:
         self.sp_enu = np.array([0.0, 0.0, 0.0], dtype=float)
         self.warmup_count += 1
@@ -526,6 +537,16 @@ class FractalArucoPrecisionLander(Node):
 
         descent_radius = self._descent_radius()
         descent_allowed = self.target_rel_norm <= descent_radius
+
+        # Low-altitude commitment: below 3.5m, force descent to avoid pause/realign oscillations.
+        if self.pos_enu[2] < 3.5:
+            if not descent_allowed:
+                self.get_logger().info(
+                    f"Low altitude ({self.pos_enu[2]:.2f}m < 3.5m) - committing to descent despite drift: err={self.target_rel_norm:.2f}m > gate={descent_radius:.2f}m",
+                    throttle_duration_sec=1.0,
+                )
+            descent_allowed = True
+
         if descent_allowed:
             self._descent_drift_count = 0
             target_final_z = self.final_alt
@@ -714,11 +735,14 @@ class FractalArucoPrecisionLander(Node):
         return min(self.pose_reject_radius_max, max(self.pose_reject_radius_min, value))
 
     def _visual_setpoint(self, target_z: float, max_step: float) -> np.ndarray:
-        if self.filtered_rel_enu is None:
-            hold_xy = self.target_enu[:2] if self.target_enu is not None else self.pos_enu[:2]
+        if self.target_enu is None:
+            hold_xy = self.pos_enu[:2]
             return np.array([hold_xy[0], hold_xy[1], target_z], dtype=float)
 
-        delta_enu = self._servo_gain() * self.filtered_rel_enu
+        # Calculate current relative offset using the absolute target position and current drone position.
+        # This resolves visual servo coordinate drift/lag caused by stale relative coordinates.
+        current_rel_enu = self.target_enu[:2] - self.pos_enu[:2]
+        delta_enu = self._servo_gain() * current_rel_enu
         dist = float(np.linalg.norm(delta_enu))
         if dist > max_step:
             delta_enu *= max_step / dist
@@ -941,6 +965,12 @@ class FractalArucoPrecisionLander(Node):
             self._last_land_wait_log = 0.0
         self.get_logger().info(f"State: {self.state} -> {new_state}")
         self.state = new_state
+        try:
+            state_msg = String()
+            state_msg.data = new_state
+            self.pub_state.publish(state_msg)
+        except Exception as e:
+            self.get_logger().error(f"Failed to publish state transition: {e}")
 
     def _yaw_from_attitude(self) -> float:
         w, x, y, z = [float(v) for v in self.q_att]

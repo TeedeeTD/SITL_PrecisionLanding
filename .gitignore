@@ -4,6 +4,7 @@ ros2_ws/install/
 ros2_ws/log/
 aruco_build/
 search_frame.png
+scratch/
 
 # External dependencies (clone separately)
 ros2_ws/src/px4_msgs/

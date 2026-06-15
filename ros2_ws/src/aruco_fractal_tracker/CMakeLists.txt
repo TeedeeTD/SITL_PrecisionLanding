@@ -13,12 +13,14 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(aruco REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
+find_package(tf2_ros REQUIRED)
 
 include_directories(include)
 
@@ -40,11 +42,13 @@ ament_target_dependencies(aruco_fractal_tracker_node
   cv_bridge 
   geometry_msgs 
   sensor_msgs 
+  std_msgs
   rclcpp_components 
   aruco 
   OpenCV
   tf2
   tf2_geometry_msgs
+  tf2_ros
 )
 rclcpp_components_register_nodes(aruco_fractal_tracker_node "fractal_tracker::ArucoFractalTracker")
 
@@ -85,11 +89,13 @@ ament_export_dependencies(
   rclcpp 
   geometry_msgs 
   sensor_msgs 
+  std_msgs
   rclcpp_components 
   cv_bridge 
   aruco
   tf2
   tf2_geometry_msgs
+  tf2_ros
 )
 
 ament_package()

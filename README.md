@@ -3,7 +3,7 @@
 Project này chứa hai pipeline hạ cánh chính xác cho PX4 Gazebo `x500_gimbal`:
 
 - **AprilTag landing**: dùng OpenCV AprilTag detector trong node Python (chạy trên nền uXRCE-DDS).
-- **Fractal ArUco landing**: dùng C++ `aruco_fractal_tracker` với marker `FRACTAL_5L_6`, và điều khiển hạ cánh chính xác qua **MAVROS** (hệ tọa độ ENU, hỗ trợ Gimbal Manager V2).
+- **Fractal ArUco landing**: dùng C++ `aruco_fractal_tracker` với marker fractal tùy chỉnh 50 cm, và điều khiển hạ cánh chính xác qua **MAVROS** trong hệ tọa độ ENU.
 
 ## Cấu Trúc
 
@@ -46,7 +46,8 @@ Cần có:
 - PX4 Gazebo simulation chạy được.
 - PX4 `gz_x500_gimbal` chạy được.
 - ROS 2 Humble.
-- `MicroXRCEAgent`.
+- `MicroXRCEAgent` cho pipeline AprilTag.
+- MAVROS cho pipeline Fractal ArUco.
 - `ros_gz_image`, `cv_bridge`, `rqt_image_view`.
 - ArUco C++ library có `libaruco.so.3.1`.
 
@@ -124,6 +125,8 @@ sudo apt update
 sudo apt install -y \
   ros-humble-ros-gz-image \
   ros-humble-ros-gz-bridge \
+  ros-humble-mavros \
+  ros-humble-mavros-extras \
   ros-humble-cv-bridge \
   ros-humble-image-transport \
   ros-humble-rqt-image-view \
@@ -226,9 +229,18 @@ ros2 run px4_offboard apriltag_precision_lander --ros-args -p target_tag_id:=0
 
 ## Fractal ArUco Landing (MAVROS-based)
 
-Pipeline định vị hạ cánh chính xác sử dụng MAVROS thay cho uXRCE-DDS. Pipeline này tự động xoay hệ tọa độ theo góc quay thực tế của drone (`camera_yaw_frame:=body`) và tương thích với Gimbal Manager Protocol V2 của PX4 v1.15+.
+Pipeline định vị hạ cánh chính xác sử dụng MAVROS thay cho uXRCE-DDS. Tracker C++ xuất pose trong camera optical frame; lander lọc pose, bù camera offset, xoay theo yaw thân drone và điều khiển trong local ENU.
 
-Trong chế độ này, mô hình marker được đổi sang kích thước thực tế **0.30m x 0.30m**, do đó tracker và world được cấu hình với kích thước `0.30`.
+Cấu hình SITL hiện tại:
+
+```text
+marker:       0.50 m x 0.50 m
+camera:       1280 x 720, 30 Hz
+horizontal FOV: 1.2 rad
+control loop: 20 Hz
+```
+
+`model.sdf`, `marker_size` trong launch và marker vật lý phải luôn dùng cùng kích thước. Detector sử dụng `custom_fractal.yml`; file này được sync sang PX4 cùng model.
 
 ### Terminal 1: Khởi động PX4 SITL
 ```bash
@@ -244,6 +256,13 @@ source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
 ros2 launch px4_offboard fractal_aruco_landing.launch.py
 ```
 
+Nếu PX4 checkout không nằm tại `~/PX4`, truyền đường dẫn cấu hình marker:
+
+```bash
+ros2 launch px4_offboard fractal_aruco_landing.launch.py \
+  marker_configuration:=/absolute/path/to/custom_fractal.yml
+```
+
 Controller dùng ENU cho logic hạ cánh:
 
 ```text
@@ -256,6 +275,8 @@ pos_enu / target_enu / raw_enu / sp_enu đều là ENU
 - **Ảnh Annotated camera & Latency:** Mở `ros2 run rqt_image_view rqt_image_view` và chọn topic `/landing/annotated_image`.
 - **Tần số setpoint:** `ros2 topic hz /mavros/setpoint_position/local` (phải đạt ~20 Hz trong khi bay Offboard).
 - **Trạng thái MAVROS:** `ros2 topic echo --once /mavros/state`
+- **Trạng thái landing FSM:** `ros2 topic echo /lander/state`
+- **Pose UAV ENU:** `ros2 topic echo --once /mavros/local_position/pose`
 
 ## Xem Camera
 
@@ -288,13 +309,15 @@ ros2 topic hz /aruco_fractal_tracker/poses
 ros2 topic echo --once /aruco_fractal_tracker/poses
 ```
 
-PX4 ROS 2 topics:
+MAVROS topics cho pipeline Fractal:
 
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
-ros2 topic echo --once /fmu/out/vehicle_status_v4
-ros2 topic echo --once /fmu/out/vehicle_local_position_v1
+ros2 topic hz /mavros/setpoint_position/local
+ros2 topic echo --once /mavros/state
+ros2 topic echo --once /mavros/extended_state
+ros2 topic echo --once /mavros/local_position/pose
 ```
 
 ## Dấu Hiệu Thành Công
@@ -316,5 +339,7 @@ Không dùng force-disarm làm tiêu chuẩn thành công khi chạy thật.
 
 - AprilTag vẫn là pipeline riêng và giữ nguyên.
 - Fractal ArUco là pipeline ArUco chính của project.
-- Với `fractal_aruco_landing`, dùng `marker_size:=1.0`.
+- Với `fractal_aruco_landing`, dùng `marker_size:=0.50`.
 - Nếu sau này đổi physical marker size trong `fractal_aruco_marker/model.sdf`, phải đổi `marker_size` tương ứng.
+- `command 520 unsupported` là capability request MAVLink cũ từ client và không phải lệnh điều khiển landing.
+- Trước mỗi lần chạy lại, dừng các tiến trình PX4/MAVROS cũ để tránh giữ UDP endpoint hoặc quyền điều khiển gimbal từ phiên trước.

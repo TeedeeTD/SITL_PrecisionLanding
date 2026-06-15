@@ -35,11 +35,19 @@ ArucoFractalTracker::ArucoFractalTracker(const rclcpp::NodeOptions &options)
   this->declare_parameter<double>("marker_size", 0.0);
   this->declare_parameter<bool>("show_latency_overlay", true);
   this->declare_parameter<double>("latency_warn_ms", 100.0);
+  this->declare_parameter<double>("camera_x_to_body_east_sign", -1.0);
+  this->declare_parameter<double>("camera_y_to_body_north_sign", 1.0);
+  this->declare_parameter<double>("camera_offset_x", 0.1517);
+  this->declare_parameter<double>("camera_offset_y", 0.0);
 
   auto marker_configuration = this->get_parameter("marker_configuration").get_value<std::string>();
   marker_size_ = this->get_parameter("marker_size").get_value<double>();
   show_latency_overlay_ = this->get_parameter("show_latency_overlay").as_bool();
   latency_warn_ms_ = this->get_parameter("latency_warn_ms").as_double();
+  camera_x_to_east_sign_ = this->get_parameter("camera_x_to_body_east_sign").as_double();
+  camera_y_to_north_sign_ = this->get_parameter("camera_y_to_body_north_sign").as_double();
+  camera_offset_x_ = this->get_parameter("camera_offset_x").as_double();
+  camera_offset_y_ = this->get_parameter("camera_offset_y").as_double();
   
   detector_.setConfiguration(marker_configuration);
 
@@ -64,6 +72,21 @@ ArucoFractalTracker::ArucoFractalTracker(const rclcpp::NodeOptions &options)
   image_pub_ = this->create_publisher<sensor_msgs::msg::Image>("image_output_topic", 10);
 
   marker_pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("poses_output_topic", 10);
+
+  rclcpp::QoS pose_qos(1);
+  pose_qos.best_effort();
+  pose_qos.durability(RMW_QOS_POLICY_DURABILITY_VOLATILE);
+  uav_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
+    "/mavros/local_position/pose", pose_qos,
+    [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+      last_uav_pose_ = msg;
+    });
+
+  lander_state_sub_ = this->create_subscription<std_msgs::msg::String>(
+    "/lander/state", 10,
+    [this](const std_msgs::msg::String::SharedPtr msg) {
+      last_lander_state_ = msg->data;
+    });
 
   tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(*this);
 
@@ -289,6 +312,8 @@ void ArucoFractalTracker::imageCallback(const sensor_msgs::msg::Image::SharedPtr
       cv::putText(cv_ptr->image, cv::format("W=%.2f", quat.getW()), ori_text_pos, font_face, font_scale, cv::Scalar(255, 255, 255), 3, cv::LINE_AA);
       cv::putText(cv_ptr->image, cv::format("W=%.2f", quat.getW()), ori_text_pos, font_face, font_scale, cv::Scalar(0, 0, 0), 1, cv::LINE_AA);
 
+      // Removed old HUD overlay block to be drawn at the end of callback
+
       geometry_msgs::msg::TransformStamped transform;
       transform.header.stamp = msg->header.stamp;
       transform.header.frame_id = msg->header.frame_id;
@@ -350,6 +375,100 @@ void ArucoFractalTracker::imageCallback(const sensor_msgs::msg::Image::SharedPtr
   if (show_latency_overlay_)
   {
     drawLatencyOverlay(cv_ptr->image);
+  }
+
+  // Draw the HUD ENU coordinates and Lander State overlay.
+  // This is drawn at the bottom-right (X = image.cols - 450) to avoid overlapping
+  // with the latency overlay at the bottom-left.
+  {
+    const int font_face = cv::FONT_HERSHEY_SIMPLEX;
+    const double font_scale = 0.55;
+    const int thickness = 1;
+    const int line_h = 22;
+    const int margin = 10;
+    const int panel_w = 400;
+    const int panel_h = 6 * line_h + 12;
+    const int panel_top = std::max(0, cv_ptr->image.rows - panel_h - margin);
+    const int panel_left = std::max(0, cv_ptr->image.cols - panel_w - margin);
+
+    // Draw solid black background panel
+    cv::rectangle(
+      cv_ptr->image, cv::Point(panel_left, panel_top), cv::Point(cv_ptr->image.cols - margin, cv_ptr->image.rows - margin),
+      cv::Scalar(0, 0, 0), cv::FILLED);
+
+    // Draw white border around the panel
+    cv::rectangle(
+      cv_ptr->image, cv::Point(panel_left, panel_top), cv::Point(cv_ptr->image.cols - margin, cv_ptr->image.rows - margin),
+      cv::Scalar(150, 150, 150), 1);
+
+    cv::Point pos(panel_left + 10, panel_top + line_h);
+
+    auto draw_text = [&](const std::string& text, const cv::Scalar& color = cv::Scalar(255, 255, 255)) {
+      cv::putText(cv_ptr->image, text, pos, font_face, font_scale, color, thickness, cv::LINE_AA);
+      pos.y += line_h;
+    };
+
+    draw_text("FLIGHT STATE: " + last_lander_state_, cv::Scalar(80, 220, 240)); // Cyan color
+
+    if (last_uav_pose_)
+    {
+      double uav_x = last_uav_pose_->pose.position.x; // East
+      double uav_y = last_uav_pose_->pose.position.y; // North
+      double uav_z = last_uav_pose_->pose.position.z; // Up
+
+      tf2::Quaternion q(
+        last_uav_pose_->pose.orientation.x,
+        last_uav_pose_->pose.orientation.y,
+        last_uav_pose_->pose.orientation.z,
+        last_uav_pose_->pose.orientation.w
+      );
+      tf2::Matrix3x3 m(q);
+      double roll, pitch, yaw;
+      m.getRPY(roll, pitch, yaw); // yaw is ENU
+
+      draw_text(cv::format("UAV ENU: E=%.2f, N=%.2f, U=%.2f", uav_x, uav_y, uav_z));
+      draw_text(cv::format("UAV YAW: %.1f deg", yaw * 180.0 / 3.141592653589793));
+
+      if (detector_.poseEstimation())
+      {
+        cv::Mat tvec = detector_.getTvec();
+        double tx = tvec.at<double>(0, 0);
+        double ty = tvec.at<double>(1, 0);
+
+        double east_body = camera_x_to_east_sign_ * tx;
+        double north_body = camera_y_to_north_sign_ * ty;
+
+        double x_body = north_body + camera_offset_x_;
+        double y_body = -east_body + camera_offset_y_;
+
+        double c = cos(yaw);
+        double s = sin(yaw);
+
+        double rel_east = x_body * c - y_body * s;
+        double rel_north = x_body * s + y_body * c;
+
+        double abs_east = uav_x + rel_east;
+        double abs_north = uav_y + rel_north;
+
+        draw_text(cv::format("REL ENU: E=%.2f, N=%.2f", rel_east, rel_north), cv::Scalar(100, 255, 100)); // Light green
+        draw_text(cv::format("TGT ENU: E=%.2f, N=%.2f", abs_east, abs_north), cv::Scalar(100, 100, 255)); // Light red/blue
+        draw_text(cv::format("CAM TVEC: [%.2f, %.2f, %.2f]", tx, ty, tvec.at<double>(2, 0)));
+      }
+      else
+      {
+        draw_text("REL ENU: NO MARKER DETECTED", cv::Scalar(0, 0, 255)); // Red
+        draw_text("TGT ENU: NO MARKER DETECTED", cv::Scalar(0, 0, 255));
+        draw_text("CAM TVEC: N/A");
+      }
+    }
+    else
+    {
+      draw_text("UAV ENU: WAITING FOR MAVROS...", cv::Scalar(0, 150, 255)); // Orange/Yellow
+      draw_text("UAV YAW: WAITING FOR MAVROS...", cv::Scalar(0, 150, 255));
+      draw_text("REL ENU: WAITING FOR MAVROS...");
+      draw_text("TGT ENU: WAITING FOR MAVROS...");
+      draw_text("CAM TVEC: N/A");
+    }
   }
 
   if ((now - last_latency_log_).seconds() >= 1.0)

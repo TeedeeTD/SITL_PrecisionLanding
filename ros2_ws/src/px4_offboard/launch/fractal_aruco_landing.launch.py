@@ -7,6 +7,15 @@ from ament_index_python.packages import get_package_share_directory
 import os
 
 def generate_launch_description():
+    marker_configuration_arg = DeclareLaunchArgument(
+        'marker_configuration',
+        default_value=os.path.join(
+            os.path.expanduser('~'),
+            'PX4/Tools/simulation/gz/models/fractal_aruco_marker/custom_fractal.yml'
+        ),
+        description='Absolute path to the custom fractal marker configuration'
+    )
+
     # Declare cruise_alt launch argument
     cruise_alt_arg = DeclareLaunchArgument(
         'cruise_alt',
@@ -62,11 +71,15 @@ def generate_launch_description():
         package='aruco_fractal_tracker',
         executable='aruco_fractal_tracker',
         parameters=[{
-            'marker_configuration': 'FRACTAL_5L_6',
+            'marker_configuration': LaunchConfiguration('marker_configuration'),
             'marker_size': 0.50,
             'show_latency_overlay': True,
             'latency_warn_ms': 100.0,
-            'use_sim_time': True
+            'use_sim_time': True,
+            'camera_x_to_body_east_sign': 1.0,
+            'camera_y_to_body_north_sign': -1.0,
+            'camera_offset_x': LaunchConfiguration('camera_offset_x'),
+            'camera_offset_y': LaunchConfiguration('camera_offset_y')
         }],
         remappings=[
             ('image_input_topic', '/gimbal_camera'),
@@ -98,6 +111,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        marker_configuration_arg,
         cruise_alt_arg,
         camera_offset_x_arg,
         camera_offset_y_arg,
