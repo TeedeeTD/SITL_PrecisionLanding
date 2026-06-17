@@ -10,38 +10,43 @@ Project này chứa ba pipeline hạ cánh chính xác cho drone `x500_gimbal` t
 
 ## Cấu Trúc Thư Mục & Đồng Bộ Mô Phỏng
 
-Đặt thư mục dự án trong cây thư mục PX4 checkout:
+1. **Clone Dự Án**: Clone repository này vào thư mục `examples` của cây thư mục PX4 checkout:
 
-```text
-~/PX4
-└── examples
-    └── gimbal_simulation
-```
+   ```bash
+   cd ~/PX4/examples
+   git clone git@github.com:do010303/gimbal_simulation.git
+   ```
 
-PX4 Gazebo load world/model từ:
+   Cấu trúc thư mục mong đợi:
+   ```text
+   ~/PX4
+   └── examples
+       └── gimbal_simulation
+   ```
 
-```text
-~/PX4/Tools/simulation/gz/worlds
-~/PX4/Tools/simulation/gz/models
-```
+2. **Đồng Bộ Hóa Mô Phỏng (Sync Worlds, Models & Textures)**:
+   PX4 Gazebo sẽ load các world và model từ thư mục nội bộ của PX4. Đồng bộ hóa toàn bộ tài nguyên mô phỏng (bao gồm các file world `.sdf`, mô hình `x500_gimbal`, và mô hình marker Fractal `fractal_aruco_marker` - chứa tệp ảnh kết cấu `marker.png` và cấu hình `custom_fractal.yml` của marker) bằng lệnh `rsync`:
 
-Sau khi clone hoặc sửa world/model, sync overlay:
+   ```bash
+   cd ~/PX4
+   rsync -a \
+     examples/gimbal_simulation/px4/Tools/simulation/gz/ \
+     Tools/simulation/gz/
+   ```
 
-```bash
-cd ~/PX4
-rsync -a \
-  examples/gimbal_simulation/px4/Tools/simulation/gz/ \
-  Tools/simulation/gz/
-```
+3. **Kiểm tra các tệp tin chính**:
 
-Kiểm tra các world chính:
-
-```bash
-ls ~/PX4/Tools/simulation/gz/worlds/apriltag_landing.sdf
-ls ~/PX4/Tools/simulation/gz/worlds/aruco_landing.sdf
-ls ~/PX4/Tools/simulation/gz/worlds/fractal_aruco_landing.sdf
-ls ~/PX4/Tools/simulation/gz/models/fractal_aruco_marker/model.sdf
-```
+   ```bash
+   # Kiểm tra worlds
+   ls ~/PX4/Tools/simulation/gz/worlds/apriltag_landing.sdf
+   ls ~/PX4/Tools/simulation/gz/worlds/aruco_landing.sdf
+   ls ~/PX4/Tools/simulation/gz/worlds/fractal_aruco_landing.sdf
+   
+   # Kiểm tra mô hình và kết cấu ảnh của Fractal
+   ls ~/PX4/Tools/simulation/gz/models/fractal_aruco_marker/model.sdf
+   ls ~/PX4/Tools/simulation/gz/models/fractal_aruco_marker/marker.png
+   ls ~/PX4/Tools/simulation/gz/models/fractal_aruco_marker/custom_fractal.yml
+   ```
 
 ---
 
