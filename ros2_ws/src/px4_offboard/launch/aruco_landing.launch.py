@@ -111,12 +111,13 @@ def generate_launch_description():
 
     # 4. ArUco Tracker Node (passes coordinate transform configs)
     tracker_node = Node(
-        package='px4_offboard',
+        package='aruco_fractal_tracker',
         executable='aruco_tracker',
         parameters=[{
             'dictionary': LaunchConfiguration('dictionary'),
             'target_tag_id': LaunchConfiguration('target_tag_id'),
             'marker_size': LaunchConfiguration('marker_size'),
+            'pose_output_topic': '/aruco_tracker/pose',
             'use_sim_time': True,
             'camera_x_to_body_east_sign': 1.0,
             'camera_y_to_body_north_sign': -1.0,

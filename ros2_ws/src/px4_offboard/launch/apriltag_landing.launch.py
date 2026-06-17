@@ -99,12 +99,13 @@ def generate_launch_description():
 
     # 4. AprilTag Tracker Node (passes coordinate transform configs)
     tracker_node = Node(
-        package='px4_offboard',
+        package='aruco_fractal_tracker',
         executable='apriltag_tracker',
         parameters=[{
             'dictionary': 'DICT_APRILTAG_25h9',
             'target_tag_id': LaunchConfiguration('target_tag_id'),
             'marker_size': 0.50,
+            'pose_output_topic': '/apriltag_tracker/pose',
             'use_sim_time': True,
             'camera_x_to_body_east_sign': 1.0,
             'camera_y_to_body_north_sign': -1.0,

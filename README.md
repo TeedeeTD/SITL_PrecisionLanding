@@ -3,8 +3,8 @@
 Project này chứa ba pipeline hạ cánh chính xác cho drone `x500_gimbal` trong mô phỏng Gazebo SITL, sử dụng **MAVROS** làm giao thức kết nối điều khiển chính:
 
 1. **Fractal ArUco landing**: Sử dụng bộ tracker C++ `aruco_fractal_tracker` với cấu trúc marker lồng nhau (nested fractal marker) tùy chỉnh có kích thước ngoài cùng 50 cm.
-2. **Standard ArUco landing**: Bộ định vị Python linh hoạt (`aruco_tracker` & `aruco_precision_lander`) cho phép phát hiện các marker chuẩn từ nhiều thư viện (vd: `DICT_4X4_50`, `DICT_ARUCO_MIP_36h12`).
-3. **AprilTag landing**: Bộ định vị Python (`apriltag_tracker` & `apriltag_precision_lander`) hỗ trợ phát hiện AprilTag (vd: `tag36h11`).
+2. **Standard ArUco landing**: Bộ định vị C++ hiệu năng cao (`aruco_tracker` trong package `aruco_fractal_tracker` & Python `aruco_precision_lander`) cho phép phát hiện các marker chuẩn.
+3. **AprilTag landing**: Bộ định vị C++ hiệu năng cao (`apriltag_tracker` trong package `aruco_fractal_tracker` & Python `apriltag_precision_lander`) hỗ trợ phát hiện AprilTag.
 
 ---
 

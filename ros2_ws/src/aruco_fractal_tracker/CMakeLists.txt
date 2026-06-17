@@ -31,6 +31,7 @@ find_library(ARUCO_LIBRARY
 )
 get_filename_component(ARUCO_LIBRARY_DIR "${ARUCO_LIBRARY}" DIRECTORY)
 
+# 1. Fractal Tracker Library & Executable
 add_library(aruco_fractal_tracker_node SHARED src/aruco_fractal_tracker_node.cpp)
 target_link_libraries(aruco_fractal_tracker_node "${ARUCO_LIBRARY}")
 set_target_properties(aruco_fractal_tracker_node PROPERTIES
@@ -59,14 +60,50 @@ set_target_properties(aruco_fractal_tracker PROPERTIES
   INSTALL_RPATH "${ARUCO_LIBRARY_DIR}"
 )
 
+# 2. Standard / AprilTag Tracker Library & Executables
+add_library(aruco_standard_tracker_node SHARED src/aruco_standard_tracker_node.cpp)
+target_link_libraries(aruco_standard_tracker_node "${ARUCO_LIBRARY}")
+set_target_properties(aruco_standard_tracker_node PROPERTIES
+  BUILD_RPATH "${ARUCO_LIBRARY_DIR}"
+  INSTALL_RPATH "${ARUCO_LIBRARY_DIR}"
+)
+ament_target_dependencies(aruco_standard_tracker_node 
+  rclcpp 
+  cv_bridge 
+  geometry_msgs 
+  sensor_msgs 
+  std_msgs
+  rclcpp_components 
+  aruco 
+  OpenCV
+  tf2
+  tf2_geometry_msgs
+  tf2_ros
+)
+rclcpp_components_register_nodes(aruco_standard_tracker_node "standard_tracker::ArucoStandardTracker")
+
+add_executable(aruco_tracker src/aruco_standard_tracker_node_main.cpp)
+target_link_libraries(aruco_tracker aruco_standard_tracker_node)
+set_target_properties(aruco_tracker PROPERTIES
+  BUILD_RPATH "${ARUCO_LIBRARY_DIR}"
+  INSTALL_RPATH "${ARUCO_LIBRARY_DIR}"
+)
+
+add_executable(apriltag_tracker src/aruco_standard_tracker_node_main.cpp)
+target_link_libraries(apriltag_tracker aruco_standard_tracker_node)
+set_target_properties(apriltag_tracker PROPERTIES
+  BUILD_RPATH "${ARUCO_LIBRARY_DIR}"
+  INSTALL_RPATH "${ARUCO_LIBRARY_DIR}"
+)
+
+# 3. Installation
 install(
   DIRECTORY include/aruco_fractal_tracker
   DESTINATION include
 )
 
 install(
-  TARGETS aruco_fractal_tracker_node
-  EXPORT export_aruco_fractal_tracker_node
+  TARGETS aruco_fractal_tracker_node aruco_standard_tracker_node
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib
   RUNTIME DESTINATION bin
@@ -74,7 +111,7 @@ install(
 )
 
 install(
-  TARGETS aruco_fractal_tracker
+  TARGETS aruco_fractal_tracker aruco_tracker apriltag_tracker
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -83,7 +120,7 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
-ament_export_libraries(aruco_fractal_tracker_node)
+ament_export_libraries(aruco_fractal_tracker_node aruco_standard_tracker_node)
 
 ament_export_dependencies(
   rclcpp 
