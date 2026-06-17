@@ -70,17 +70,17 @@ class FractalConfig:
     POSE_ALPHA_LOW_ALT = 0.45
 
     # Dynamic acceptance gates.
-    ALIGN_RADIUS_MIN = 0.50
-    ALIGN_RADIUS_MAX = 2.50
-    ALIGN_RADIUS_ALT_GAIN = 0.11
+    ALIGN_RADIUS_MIN = 1.20
+    ALIGN_RADIUS_MAX = 4.00
+    ALIGN_RADIUS_ALT_GAIN = 0.20
     ALIGN_RADIUS_BIAS = 0.15
-    DESCENT_RADIUS_MIN = 0.80
-    DESCENT_RADIUS_MAX = 3.00
-    DESCENT_RADIUS_ALT_GAIN = 0.14
+    DESCENT_RADIUS_MIN = 1.50
+    DESCENT_RADIUS_MAX = 5.00
+    DESCENT_RADIUS_ALT_GAIN = 0.25
     DESCENT_RADIUS_BIAS = 0.20
-    POSE_REJECT_RADIUS_MIN = 6.00
-    POSE_REJECT_RADIUS_MAX = 10.00
-    POSE_REJECT_RADIUS_ALT_GAIN = 0.45
+    POSE_REJECT_RADIUS_MIN = 12.00
+    POSE_REJECT_RADIUS_MAX = 25.00
+    POSE_REJECT_RADIUS_ALT_GAIN = 1.50
 
     # Tracker pose axes.
     CAMERA_X_TO_ENU_EAST_SIGN = 1.0
@@ -414,24 +414,17 @@ class FractalArucoPrecisionLander(Node):
         self.pose_count += 1
         now = self._now_sec()
 
-        if msg.state == LandingTarget6D.SEARCHING:
-            # A single empty detector frame is common with the far/high-altitude
-            # marker. Keep the last accepted pose alive through the normal
+        if msg.tag_id < 0:
+            # Missed detection. Keep the last accepted pose alive through the normal
             # timeout window instead of resetting the landing FSM immediately.
             if (now - self.last_pose_time) < self.cfg.TARGET_TIMEOUT:
                 return
-            self.last_tracker_state = LandingTarget6D.SEARCHING
-            self.tracking_target_count = 0
-            self._approach_ready_count = 0
-            return
-
-        if msg.state != LandingTarget6D.TRACKING:
             self.last_tracker_state = msg.state
             self.tracking_target_count = 0
             self._approach_ready_count = 0
             return
 
-        self.last_tracker_state = LandingTarget6D.TRACKING
+        self.last_tracker_state = msg.state
         self.tracking_target_count += 1
         tvec = np.array([msg.x, msg.y, msg.z], dtype=float)
         camera_xy = np.array(
@@ -577,7 +570,6 @@ class FractalArucoPrecisionLander(Node):
         if (
             self._pose_recent()
             and self.tracking_target_count >= self.cfg.TRACKING_CONFIRM_COUNT
-            and self._approach_ready_count >= self.cfg.APPROACH_CONFIRM_COUNT
         ):
             self.get_logger().info(
                 f"Fractal marker detected: tvec=[{self.last_pose_tvec[0]:.2f}, "
@@ -864,7 +856,7 @@ class FractalArucoPrecisionLander(Node):
 
     def _pose_recent(self) -> bool:
         return (
-            self.last_tracker_state == LandingTarget6D.TRACKING
+            self.last_tracker_state in (LandingTarget6D.TRACKING, LandingTarget6D.SEARCHING)
             and (self._now_sec() - self.last_pose_time) < self.cfg.TARGET_TIMEOUT
         )
 
@@ -1046,14 +1038,14 @@ class FractalArucoPrecisionLander(Node):
         pitch_deg = math.degrees(pitch_rad)
         if not self._gimbal_control_configured:
             self._cmd(
-                1000, # MAV_CMD_DO_GIMBAL_MANAGER_CONFIGURE
+                1001, # MAV_CMD_DO_GIMBAL_MANAGER_CONFIGURE
                 p1=1.0,
                 p2=191.0,
             )
             self._gimbal_control_configured = True
 
         self._cmd(
-            1001, # MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW
+            1000, # MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW
             p1=pitch_deg,
             p2=0.0,
             p3=math.nan,

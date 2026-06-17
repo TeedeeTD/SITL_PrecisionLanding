@@ -116,8 +116,8 @@ def generate_launch_description():
         executable='fractal_aruco_precision_lander',
         parameters=[{
             'search_frame': 'enu',
-            'search_x': 3.0,
-            'search_y': 2.0,
+            'search_x': 4.0,
+            'search_y': -3.5,
             'cruise_alt': LaunchConfiguration('cruise_alt'),
             'marker_size': 0.50,
             'camera_yaw_frame': 'body',

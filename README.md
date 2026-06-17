@@ -192,11 +192,11 @@ Tầng trong cùng (Inner - Level 3): 3.125 cm (0.03125 m)
 
 * **Terminal 2: Khởi động toàn bộ cụm ROS 2 Nodes (Unified Launch File)**
 
-  ```bash
+```bash
   source /opt/ros/humble/setup.bash
   source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
   ros2 launch px4_offboard fractal_aruco_landing.launch.py
-  ```
+```
 
 Nếu PX4 checkout không nằm tại `~/PX4`, truyền đường dẫn cấu hình marker:
 

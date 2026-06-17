@@ -62,17 +62,17 @@ class ArucoConfig:
     POSE_ALPHA_LOW_ALT = 0.45
 
     # Dynamic acceptance gates.
-    ALIGN_RADIUS_MIN = 0.50
-    ALIGN_RADIUS_MAX = 2.50
-    ALIGN_RADIUS_ALT_GAIN = 0.11
+    ALIGN_RADIUS_MIN = 1.20
+    ALIGN_RADIUS_MAX = 4.00
+    ALIGN_RADIUS_ALT_GAIN = 0.20
     ALIGN_RADIUS_BIAS = 0.15
-    DESCENT_RADIUS_MIN = 0.80
-    DESCENT_RADIUS_MAX = 3.00
-    DESCENT_RADIUS_ALT_GAIN = 0.14
+    DESCENT_RADIUS_MIN = 1.50
+    DESCENT_RADIUS_MAX = 5.00
+    DESCENT_RADIUS_ALT_GAIN = 0.25
     DESCENT_RADIUS_BIAS = 0.20
-    POSE_REJECT_RADIUS_MIN = 6.00
-    POSE_REJECT_RADIUS_MAX = 10.00
-    POSE_REJECT_RADIUS_ALT_GAIN = 0.45
+    POSE_REJECT_RADIUS_MIN = 12.00
+    POSE_REJECT_RADIUS_MAX = 25.00
+    POSE_REJECT_RADIUS_ALT_GAIN = 1.50
 
     # Tracker pose axes.
     CAMERA_X_TO_ENU_EAST_SIGN = 1.0
@@ -877,14 +877,14 @@ class ArucoPrecisionLander(Node):
         pitch_deg = math.degrees(pitch_rad)
         if not self._gimbal_control_configured:
             self._cmd(
-                1000, # MAV_CMD_DO_GIMBAL_MANAGER_CONFIGURE
+                1001, # MAV_CMD_DO_GIMBAL_MANAGER_CONFIGURE
                 p1=1.0,
                 p2=1.0,
             )
             self._gimbal_control_configured = True
 
         self._cmd(
-            1001, # MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW
+            1000, # MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW
             p1=pitch_deg,
             p2=0.0,
             p3=math.nan,
