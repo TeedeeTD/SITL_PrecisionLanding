@@ -51,11 +51,11 @@ ArucoFractalTracker::ArucoFractalTracker(const rclcpp::NodeOptions &options)
   
   detector_.setConfiguration(marker_configuration);
 
-  // Set default/fallback camera parameters (width: 1280, height: 720, HFOV: 1.2 rad)
-  // fx = fy = (1280 / 2) / tan(1.2 / 2) = 640 / tan(0.6) = 935.4853
+  // Set default/fallback camera parameters (width: 1280, height: 720, HFOV: 1.4 rad)
+  // fx = fy = (1280 / 2) / tan(1.4 / 2) = 640 / tan(0.7) = 759.8348
   cv::Mat camera_matrix = (cv::Mat_<double>(3, 3) << 
-    935.4853, 0.0, 640.0,
-    0.0, 935.4853, 360.0,
+    759.8348, 0.0, 640.0,
+    0.0, 759.8348, 360.0,
     0.0, 0.0, 1.0);
   cv::Mat dist_coeffs = cv::Mat::zeros(5, 1, CV_64F);
   cv::Size image_size(1280, 720);

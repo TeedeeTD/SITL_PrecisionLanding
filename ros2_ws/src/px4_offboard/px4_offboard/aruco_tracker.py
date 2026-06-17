@@ -160,8 +160,8 @@ class ArucoTrackerNode(Node):
         # Fallback nominal camera matrix if info topic not yet received
         if self.cam_mtx is None:
             w, h = msg.width, msg.height
-            # Nominal HFOV = 1.2 rad
-            fx = (w / 2.0) / math.tan(1.2 / 2.0)
+            # Nominal HFOV = 1.4 rad
+            fx = (w / 2.0) / math.tan(1.4 / 2.0)
             self.cam_mtx = np.array([
                 [fx, 0.0, w / 2.0],
                 [0.0, fx, h / 2.0],

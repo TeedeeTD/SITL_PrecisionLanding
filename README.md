@@ -41,7 +41,7 @@ Project này chứa ba pipeline hạ cánh chính xác cho drone `x500_gimbal` t
    ls ~/PX4/Tools/simulation/gz/worlds/apriltag_landing.sdf
    ls ~/PX4/Tools/simulation/gz/worlds/aruco_landing.sdf
    ls ~/PX4/Tools/simulation/gz/worlds/fractal_aruco_landing.sdf
-   
+
    # Kiểm tra mô hình và kết cấu ảnh của Fractal
    ls ~/PX4/Tools/simulation/gz/models/fractal_aruco_marker/model.sdf
    ls ~/PX4/Tools/simulation/gz/models/fractal_aruco_marker/marker.png
@@ -173,9 +173,13 @@ Cấu hình SITL hiện tại:
 ```text
 marker:       0.50 m x 0.50 m
 camera:       1280 x 720, 30 Hz
-horizontal FOV: 1.2 rad
+horizontal FOV: 1.4 rad
 control loop: 20 Hz
 ```
+Kích thước vật lý thực tế của từng tầng:
+Tầng ngoài cùng (Outer - Level 1): 50 cm (0.50 m)
+Tầng giữa (Middle - Level 2): 12.5 cm (0.125 m)
+Tầng trong cùng (Inner - Level 3): 3.125 cm (0.03125 m)
 
 `model.sdf`, `marker_size` trong launch và marker vật lý phải luôn dùng cùng kích thước. Detector sử dụng `custom_fractal.yml`; file này được sync sang PX4 cùng model.
 
@@ -219,7 +223,7 @@ pos_enu / target_enu / raw_enu / sp_enu đều là ENU
   ros2 run rqt_image_view rqt_image_view
   ```
   Chọn topic `/landing/annotated_image` để xem hình ảnh bám bắt mục tiêu trực quan cùng thông tin telemetry (FPS, FSM State, coordinates, TVEC).
-  
+
 * **Kiểm tra trạng thái FSM của Lander**:
   ```bash
   ros2 topic echo /lander/state
