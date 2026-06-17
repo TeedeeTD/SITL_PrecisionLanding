@@ -173,7 +173,7 @@ Cấu hình SITL hiện tại:
 ```text
 marker:       0.50 m x 0.50 m
 camera:       1280 x 720, 30 Hz
-horizontal FOV: 1.4 rad
+horizontal FOV: 1.4137 rad (81°)
 control loop: 20 Hz
 ```
 Kích thước vật lý thực tế của từng tầng:
