@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import math
 import os
-import time
 from collections import deque
 from typing import Deque, Optional, Tuple
 
 import numpy as np
 import rclpy
+from dib_msgs.msg import LandingTarget6D
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import String
 from rclpy.node import Node
@@ -32,20 +32,28 @@ class FractalConfig:
     SEARCH_ENU = (3.0, 2.0)
     FINAL_ALT = 0.30
     LANDING_TARGET_Z = 0.0
+    MARKER_SIZE_M = 0.50
 
     # Camera physical offsets relative to drone center (body FLU frame)
     CAMERA_OFFSET_X = 0.1517
     CAMERA_OFFSET_Y = 0.0
 
     # Timing
-    CTRL_HZ = 20
+    CTRL_HZ = 30
     WARMUP_SEC = 2.0
     GIMBAL_SETTLE_SEC = 4.0
     SEARCH_TIMEOUT = 35.0
     TARGET_TIMEOUT = 1.2
+    TRACKING_CONFIRM_COUNT = 10
+    APPROACH_CONFIRM_COUNT = 10
+    OFFBOARD_LOSS_GRACE = 2.5
+    LOW_ALT_COMMIT_ALT = 1.0
+    LOW_ALT_MAX_ERROR = 0.25
+    LOW_ALT_MAX_TARGET_AGE = 0.5
     TARGET_LOSS_GRACE = 1.5
     SEARCH_DIAG_INTERVAL = 2.0
     LAND_WAIT_WARN_INTERVAL = 2.0
+    DESCENT_LOSS_HOLD_SEC = 3.0
 
     # Descent/control
     DESCENT_RATE = 0.45
@@ -132,6 +140,9 @@ class FractalArucoPrecisionLander(Node):
         self.create_subscription(
             PoseStamped, self.pose_topic, self._on_tracker_pose, 10
         )
+        self.create_subscription(
+            LandingTarget6D, self.target_topic, self._on_tracker_target, 10
+        )
 
         # Service Clients
         self.arming_client = self.create_client(CommandBool, "/mavros/cmd/arming")
@@ -147,6 +158,7 @@ class FractalArucoPrecisionLander(Node):
 
         self.armed = False
         self.offboard_active = False
+        self.mavros_connected = False
         self.landed = True
         self.landed_state = ExtendedState.LANDED_STATE_UNDEFINED
         self.ground_contact = False
@@ -164,6 +176,9 @@ class FractalArucoPrecisionLander(Node):
         self.last_pose_tvec = np.zeros(3, dtype=float)
         self.pose_count = 0
         self.accepted_pose_count = 0
+        self.target_msg_count = 0
+        self.tracking_target_count = 0
+        self.last_tracker_state = LandingTarget6D.LOST
 
         self.warmup_count = 0
         self._search_start: Optional[float] = None
@@ -173,6 +188,7 @@ class FractalArucoPrecisionLander(Node):
         self._descent_z_sp = self.cruise_alt
         self._target_counter = 0
         self._centered_count = 0
+        self._approach_ready_count = 0
         self._descent_drift_count = 0
         self._last_search_diag = 0.0
         self._last_land_wait_log = 0.0
@@ -181,6 +197,10 @@ class FractalArucoPrecisionLander(Node):
         self._disarm_retry_counter = 0
         self._force_disarm_sent = False
         self._gimbal_control_configured = False
+        self._offboard_loss_start: Optional[float] = None
+        self._last_status_time = self._now_sec()
+        self._last_local_pose_time = 0.0
+        self._abort_land_sent = False
 
         self.timer = self.create_timer(1.0 / self.ctrl_hz, self._loop)
 
@@ -211,6 +231,8 @@ class FractalArucoPrecisionLander(Node):
         self.declare_parameter("search_y", cfg.SEARCH_ENU[1])
         self.declare_parameter("search_frame", cfg.SEARCH_FRAME)
         self.declare_parameter("pose_topic", "/aruco_fractal_tracker/poses")
+        self.declare_parameter("target_topic", "/landing/target_camera")
+        self.declare_parameter("enable_pose_fallback", False)
         self.declare_parameter("camera_x_to_body_east_sign", cfg.CAMERA_X_TO_ENU_EAST_SIGN)
         self.declare_parameter("camera_y_to_body_north_sign", cfg.CAMERA_Y_TO_ENU_NORTH_SIGN)
         self.declare_parameter("camera_yaw_frame", cfg.CAMERA_YAW_FRAME)
@@ -218,6 +240,7 @@ class FractalArucoPrecisionLander(Node):
         self.declare_parameter("camera_offset_y", cfg.CAMERA_OFFSET_Y)
 
         self.declare_parameter("final_alt", cfg.FINAL_ALT)
+        self.declare_parameter("marker_size", cfg.MARKER_SIZE_M)
         self.declare_parameter("descent_rate", cfg.DESCENT_RATE)
         self.declare_parameter("align_confirm_count", cfg.ALIGN_CONFIRM_COUNT)
         self.declare_parameter("max_align_step", cfg.MAX_ALIGN_STEP)
@@ -247,6 +270,7 @@ class FractalArucoPrecisionLander(Node):
         self.allow_force_disarm = bool(self.get_parameter("allow_force_disarm").value)
         self.cruise_alt = float(self.get_parameter("cruise_alt").value)
         self.final_alt = float(self.get_parameter("final_alt").value)
+        self.marker_size = float(self.get_parameter("marker_size").value)
         self.descent_rate = float(self.get_parameter("descent_rate").value)
         self.align_confirm_count = int(self.get_parameter("align_confirm_count").value)
         self.max_align_step = float(self.get_parameter("max_align_step").value)
@@ -272,6 +296,8 @@ class FractalArucoPrecisionLander(Node):
         self.pose_reject_radius_alt_gain = float(self.get_parameter("pose_reject_radius_alt_gain").value)
 
         self.pose_topic = str(self.get_parameter("pose_topic").value)
+        self.target_topic = str(self.get_parameter("target_topic").value)
+        self.enable_pose_fallback = bool(self.get_parameter("enable_pose_fallback").value)
         self.camera_x_to_east_sign = float(self.get_parameter("camera_x_to_body_east_sign").value)
         self.camera_y_to_north_sign = float(self.get_parameter("camera_y_to_body_north_sign").value)
         self.camera_yaw_frame = str(self.get_parameter("camera_yaw_frame").value).strip().lower()
@@ -299,6 +325,7 @@ class FractalArucoPrecisionLander(Node):
         self.ctrl_hz = int(cfg.CTRL_HZ)
 
     def _on_position(self, msg: PoseStamped) -> None:
+        self._last_local_pose_time = self._now_sec()
         self.pos_enu = np.array([
             msg.pose.position.x,
             msg.pose.position.y,
@@ -310,8 +337,12 @@ class FractalArucoPrecisionLander(Node):
         self.q_att = np.array([q.w, q.x, q.y, q.z], dtype=float)
 
     def _on_status(self, msg: State) -> None:
+        self._last_status_time = self._now_sec()
+        self.mavros_connected = msg.connected
         self.armed = msg.armed
         self.offboard_active = (msg.mode == "OFFBOARD")
+        if self.offboard_active:
+            self._offboard_loss_start = None
 
     def _on_extended_state(self, msg: ExtendedState) -> None:
         self.landed_state = msg.landed_state
@@ -321,6 +352,12 @@ class FractalArucoPrecisionLander(Node):
         self.at_rest = (msg.landed_state == ExtendedState.LANDED_STATE_ON_GROUND)
 
     def _on_tracker_pose(self, msg: PoseStamped) -> None:
+        # Backward-compatible fallback for the legacy PoseStamped tracker topic.
+        # The production path uses LandingTarget6D on /landing/target_camera.
+        if not self.enable_pose_fallback or self.target_msg_count > 0:
+            return
+        self.last_tracker_state = LandingTarget6D.TRACKING
+        self.tracking_target_count += 1
         self.pose_count += 1
         tvec = np.array(
             [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z],
@@ -337,7 +374,7 @@ class FractalArucoPrecisionLander(Node):
         reject_radius = self._pose_reject_radius()
         rel_norm = float(np.linalg.norm(rel_enu))
 
-        now = time.time()
+        now = self._now_sec()
         if rel_norm > reject_radius:
             self._log_pose(
                 "Tracker pose rejected",
@@ -372,6 +409,82 @@ class FractalArucoPrecisionLander(Node):
         self.accepted_pose_count += 1
         self._log_pose("Tracker pose accepted", tvec, camera_xy, self.filtered_rel_enu)
 
+    def _on_tracker_target(self, msg: LandingTarget6D) -> None:
+        self.target_msg_count += 1
+        self.pose_count += 1
+        now = self._now_sec()
+
+        if msg.state == LandingTarget6D.SEARCHING:
+            # A single empty detector frame is common with the far/high-altitude
+            # marker. Keep the last accepted pose alive through the normal
+            # timeout window instead of resetting the landing FSM immediately.
+            if (now - self.last_pose_time) < self.cfg.TARGET_TIMEOUT:
+                return
+            self.last_tracker_state = LandingTarget6D.SEARCHING
+            self.tracking_target_count = 0
+            self._approach_ready_count = 0
+            return
+
+        if msg.state != LandingTarget6D.TRACKING:
+            self.last_tracker_state = msg.state
+            self.tracking_target_count = 0
+            self._approach_ready_count = 0
+            return
+
+        self.last_tracker_state = LandingTarget6D.TRACKING
+        self.tracking_target_count += 1
+        tvec = np.array([msg.x, msg.y, msg.z], dtype=float)
+        camera_xy = np.array(
+            [
+                self.camera_x_to_east_sign * tvec[0],
+                self.camera_y_to_north_sign * tvec[1],
+            ],
+            dtype=float,
+        )
+        rel_enu = self._camera_xy_to_local_enu(camera_xy)
+        reject_radius = self._pose_reject_radius()
+        rel_norm = float(np.linalg.norm(rel_enu))
+
+        if rel_norm > reject_radius:
+            self.tracking_target_count = 0
+            self._approach_ready_count = 0
+            self._log_pose(
+                "Tracker target rejected",
+                tvec,
+                camera_xy,
+                rel_enu,
+                extra=f"norm={rel_norm:.2f}m > gate={reject_radius:.2f}m",
+            )
+            return
+
+        self.camera_xy_enu = camera_xy
+        self.raw_rel_enu = rel_enu
+        self.pose_samples.append(rel_enu)
+        stacked = np.stack(tuple(self.pose_samples), axis=0)
+        median_rel_enu = np.median(stacked, axis=0)
+        alpha = self._pose_alpha()
+        if self.filtered_rel_enu is None:
+            self.filtered_rel_enu = median_rel_enu
+        else:
+            self.filtered_rel_enu = (1.0 - alpha) * self.filtered_rel_enu + alpha * median_rel_enu
+
+        self.target_rel_norm = float(np.linalg.norm(self.filtered_rel_enu))
+        target_enu_xy = self._current_enu_xy() + self.filtered_rel_enu
+        self.target_enu = np.array(
+            [target_enu_xy[0], target_enu_xy[1], self.cfg.LANDING_TARGET_Z],
+            dtype=float,
+        )
+
+        self.last_pose_time = now
+        self.last_pose_frame = msg.header.frame_id or "<empty>"
+        self.last_pose_tvec = tvec
+        self.accepted_pose_count += 1
+        if self.target_rel_norm <= self._align_radius():
+            self._approach_ready_count += 1
+        else:
+            self._approach_ready_count = 0
+        self._log_pose("Tracker target accepted", tvec, camera_xy, self.filtered_rel_enu)
+
     def _loop(self) -> None:
         offboard_states = {
             "INIT",
@@ -383,6 +496,9 @@ class FractalArucoPrecisionLander(Node):
             "DESCEND_OVER_TARGET",
             "TARGET_LOST",
         }
+
+        if self._watchdog_abort_required():
+            self._transition("LAND")
 
         handler = getattr(self, f"_state_{self.state.lower()}", None)
         if handler is None:
@@ -430,7 +546,7 @@ class FractalArucoPrecisionLander(Node):
 
     def _state_gimbal_down(self) -> None:
         self.sp_enu = np.array([0.0, 0.0, self.cruise_alt], dtype=float)
-        if self.warmup_count % 5 == 0:
+        if self.warmup_count % self.ctrl_hz == 0:
             self._cmd_gimbal_pitch(-1.5708)
         if self.warmup_count == 0:
             self.get_logger().info("Commanding gimbal pitch to -90 deg")
@@ -450,7 +566,7 @@ class FractalArucoPrecisionLander(Node):
         if dist < 0.60:
             self.get_logger().info("Arrived at search area - starting Fractal ArUco search")
             self._reset_visual_filter(clear_pose_time=True)
-            self._search_start = time.time()
+            self._search_start = self._now_sec()
             self._transition("SEARCH")
 
     def _state_search(self) -> None:
@@ -458,19 +574,23 @@ class FractalArucoPrecisionLander(Node):
             [self.search_enu_xy[0], self.search_enu_xy[1], self.cruise_alt],
             dtype=float,
         )
-        if self._pose_recent():
+        if (
+            self._pose_recent()
+            and self.tracking_target_count >= self.cfg.TRACKING_CONFIRM_COUNT
+            and self._approach_ready_count >= self.cfg.APPROACH_CONFIRM_COUNT
+        ):
             self.get_logger().info(
                 f"Fractal marker detected: tvec=[{self.last_pose_tvec[0]:.2f}, "
                 f"{self.last_pose_tvec[1]:.2f}, {self.last_pose_tvec[2]:.2f}]"
             )
-            self._align_start = time.time()
+            self._align_start = self._now_sec()
             self._target_counter = 0
             self._centered_count = 0
             self._transition("HORIZONTAL_APPROACH")
             return
 
         self._log_search_diagnostics()
-        if self._search_start and time.time() - self._search_start > self.cfg.SEARCH_TIMEOUT:
+        if self._search_start and self._now_sec() - self._search_start > self.cfg.SEARCH_TIMEOUT:
             self.get_logger().warn("Search timeout - landing normally at current position")
             req = SetMode.Request()
             req.custom_mode = "AUTO.LAND"
@@ -479,7 +599,13 @@ class FractalArucoPrecisionLander(Node):
 
     def _state_horizontal_approach(self) -> None:
         if not self._pose_recent():
-            self._start_target_lost("fractal target lost during horizontal approach")
+            self.get_logger().warn(
+                "Fractal target lost during horizontal approach - returning to SEARCH and holding search setpoint"
+            )
+            self._reset_visual_filter(clear_pose_time=True)
+            self._search_start = self._now_sec()
+            self._target_counter = 0
+            self._transition("SEARCH")
             return
 
         self._send_current_landing_target()
@@ -507,7 +633,7 @@ class FractalArucoPrecisionLander(Node):
             self._transition("DESCEND_OVER_TARGET")
             return
 
-        if self._align_start and time.time() - self._align_start > self.cfg.ALIGN_TIMEOUT:
+        if self._align_start and self._now_sec() - self._align_start > self.cfg.ALIGN_TIMEOUT:
             descent_gate = self._descent_radius()
             if self.target_rel_norm <= descent_gate:
                 self.get_logger().warn(
@@ -523,7 +649,7 @@ class FractalArucoPrecisionLander(Node):
                 f"Fractal visual align not centered yet: err={self.target_rel_norm:.2f}m "
                 f"gate={align_radius:.2f}m"
             )
-            self._align_start = time.time()
+            self._align_start = self._now_sec()
 
     def _state_descend_over_target(self) -> None:
         if not self._pose_recent():
@@ -538,14 +664,23 @@ class FractalArucoPrecisionLander(Node):
         descent_radius = self._descent_radius()
         descent_allowed = self.target_rel_norm <= descent_radius
 
-        # Low-altitude commitment: below 3.5m, force descent to avoid pause/realign oscillations.
-        if self.pos_enu[2] < 3.5:
-            if not descent_allowed:
-                self.get_logger().info(
-                    f"Low altitude ({self.pos_enu[2]:.2f}m < 3.5m) - committing to descent despite drift: err={self.target_rel_norm:.2f}m > gate={descent_radius:.2f}m",
-                    throttle_duration_sec=1.0,
+        if self.pos_enu[2] < self.cfg.LOW_ALT_COMMIT_ALT and not descent_allowed:
+            target_age = self._now_sec() - self.last_pose_time
+            commit_allowed = (
+                target_age <= self.cfg.LOW_ALT_MAX_TARGET_AGE
+                and self.target_rel_norm <= self.cfg.LOW_ALT_MAX_ERROR
+            )
+            if commit_allowed:
+                self.get_logger().warn(
+                    "Low-altitude guarded commit: target fresh and centered; handing final phase to PX4 LAND"
                 )
-            descent_allowed = True
+                self._transition("LAND")
+                return
+            self.get_logger().warn(
+                f"Low-altitude drift is outside hard gate: alt={self.pos_enu[2]:.2f}m "
+                f"err={self.target_rel_norm:.2f}m age={target_age:.2f}s - holding/reacquiring",
+                throttle_duration_sec=1.0,
+            )
 
         if descent_allowed:
             self._descent_drift_count = 0
@@ -563,10 +698,18 @@ class FractalArucoPrecisionLander(Node):
                 throttle_duration_sec=1.0,
             )
             if self._descent_drift_count >= self.align_confirm_count:
-                self._align_start = time.time()
+                self._align_start = self._now_sec()
                 self._centered_count = 0
                 self._target_counter = 0
-                self._transition("HORIZONTAL_APPROACH")
+                if self.pos_enu[2] > self.cfg.LOW_ALT_COMMIT_ALT:
+                    self.get_logger().warn(
+                        "Descent drift persisted above commit altitude - returning to SEARCH"
+                    )
+                    self._reset_visual_filter(clear_pose_time=True)
+                    self._search_start = self._now_sec()
+                    self._transition("SEARCH")
+                else:
+                    self._transition("HORIZONTAL_APPROACH")
                 return
 
         self.sp_enu = self._visual_setpoint(self._descent_z_sp, self.max_descent_step)
@@ -584,9 +727,9 @@ class FractalArucoPrecisionLander(Node):
 
     def _state_target_lost(self) -> None:
         if self._target_lost_start is None:
-            self._target_lost_start = time.time()
+            self._target_lost_start = self._now_sec()
 
-        if self._pose_recent():
+        if self._pose_recent() and self.tracking_target_count >= self.cfg.TRACKING_CONFIRM_COUNT:
             resume = (
                 "DESCEND_OVER_TARGET"
                 if self._target_lost_from_state == "DESCEND_OVER_TARGET"
@@ -598,11 +741,39 @@ class FractalArucoPrecisionLander(Node):
             self._target_counter = 0
             self._centered_count = 0
             if resume == "HORIZONTAL_APPROACH":
-                self._align_start = time.time()
+                self._align_start = self._now_sec()
             self._transition(resume)
             return
 
-        elapsed = time.time() - self._target_lost_start
+        elapsed = self._now_sec() - self._target_lost_start
+        if self.pos_enu[2] > self.cfg.LOW_ALT_COMMIT_ALT:
+            if self._target_lost_from_state == "DESCEND_OVER_TARGET":
+                hold_xy = self.sp_enu[:2] if self.sp_enu is not None else self.pos_enu[:2]
+                hold_z = min(float(self.pos_enu[2]), float(self._descent_z_sp))
+                self.sp_enu = np.array([hold_xy[0], hold_xy[1], hold_z], dtype=float)
+                hold_msg = "holding current descent setpoint"
+                loss_grace = self.cfg.DESCENT_LOSS_HOLD_SEC
+            else:
+                self.sp_enu = np.array(
+                    [self.search_enu_xy[0], self.search_enu_xy[1], self.cruise_alt],
+                    dtype=float,
+                )
+                hold_msg = "holding search pose"
+                loss_grace = self.cfg.TARGET_LOSS_GRACE
+            if self._target_counter % self.ctrl_hz == 0:
+                self.get_logger().warn(
+                    f"Fractal target lost above commit altitude - {hold_msg}"
+                )
+            self._target_counter += 1
+            if elapsed >= loss_grace:
+                self._reset_visual_filter(clear_pose_time=True)
+                self._search_start = self._now_sec()
+                self._target_lost_start = None
+                self._target_lost_from_state = None
+                self._target_counter = 0
+                self._transition("SEARCH")
+            return
+
         if elapsed < self.cfg.TARGET_LOSS_GRACE:
             hold_xy = self.target_enu[:2] if self.target_enu is not None else self.search_enu_xy
             self.sp_enu = np.array([hold_xy[0], hold_xy[1], float(self.pos_enu[2])], dtype=float)
@@ -629,7 +800,7 @@ class FractalArucoPrecisionLander(Node):
 
         if dist < 0.60 and alt_err < 0.50:
             self._reset_visual_filter(clear_pose_time=True)
-            self._search_start = time.time()
+            self._search_start = self._now_sec()
             self._target_lost_start = None
             self._target_lost_from_state = None
             self._target_counter = 0
@@ -650,9 +821,9 @@ class FractalArucoPrecisionLander(Node):
             req.custom_mode = "AUTO.LAND"
             self.set_mode_client.call_async(req)
             self._land_cmd_sent = True
-            self._land_cmd_time = time.time()
+            self._land_cmd_time = self._now_sec()
 
-        land_elapsed = time.time() - self._land_cmd_time if self._land_cmd_time else 0.0
+        land_elapsed = self._now_sec() - self._land_cmd_time if self._land_cmd_time else 0.0
         near_ground = self.pos_enu[2] < (self.final_alt + 0.08)
 
         if not self.armed:
@@ -667,7 +838,7 @@ class FractalArucoPrecisionLander(Node):
             self._disarm_retry_counter += 1
             return
 
-        now = time.time()
+        now = self._now_sec()
         if now - self._last_land_wait_log > self.cfg.LAND_WAIT_WARN_INTERVAL:
             self._last_land_wait_log = now
             self.get_logger().warn(
@@ -692,7 +863,10 @@ class FractalArucoPrecisionLander(Node):
         pass
 
     def _pose_recent(self) -> bool:
-        return (time.time() - self.last_pose_time) < self.cfg.TARGET_TIMEOUT
+        return (
+            self.last_tracker_state == LandingTarget6D.TRACKING
+            and (self._now_sec() - self.last_pose_time) < self.cfg.TARGET_TIMEOUT
+        )
 
     def _reset_visual_filter(self, clear_pose_time: bool = False) -> None:
         self.pose_samples.clear()
@@ -701,6 +875,8 @@ class FractalArucoPrecisionLander(Node):
         self.camera_xy_enu = None
         self.target_rel_norm = float("inf")
         self.target_enu = None
+        self.tracking_target_count = 0
+        self._approach_ready_count = 0
         if clear_pose_time:
             self.last_pose_time = 0.0
 
@@ -779,7 +955,8 @@ class FractalArucoPrecisionLander(Node):
             msg.frame = LandingTarget.LOCAL_NED
             msg.angle = [0.0, 0.0]
             msg.distance = float(math.sqrt(rel_x * rel_x + rel_y * rel_y + rel_z * rel_z))
-            msg.size = [1.0, 1.0]
+            angular_size = 2.0 * math.atan2(self.marker_size, max(0.01, 2.0 * msg.distance))
+            msg.size = [float(angular_size), float(angular_size)]
             msg.pose.position.x = target_x
             msg.pose.position.y = target_y
             msg.pose.position.z = target_z
@@ -795,18 +972,18 @@ class FractalArucoPrecisionLander(Node):
     def _start_target_lost(self, reason: str, search_required: bool = True) -> None:
         if self.state == "TARGET_LOST":
             if self._target_lost_start is None:
-                self._target_lost_start = time.time()
+                self._target_lost_start = self._now_sec()
             return
 
         suffix = "returning to search if not reacquired" if search_required else "holding last visual setpoint"
         self.get_logger().warn(f"{reason} - {suffix}")
-        self._target_lost_start = time.time()
+        self._target_lost_start = self._now_sec()
         self._target_lost_from_state = self.state
         self._target_counter = 0
         self._transition("TARGET_LOST")
 
     def _log_search_diagnostics(self) -> None:
-        now = time.time()
+        now = self._now_sec()
         if now - self._last_search_diag < self.cfg.SEARCH_DIAG_INTERVAL:
             return
         self._last_search_diag = now
@@ -830,7 +1007,7 @@ class FractalArucoPrecisionLander(Node):
         rel_enu: np.ndarray,
         extra: str = "",
     ) -> None:
-        now = time.time()
+        now = self._now_sec()
         if not hasattr(self, "_last_pose_log"):
             self._last_pose_log = 0.0
         if now - self._last_pose_log < 1.0:
@@ -871,7 +1048,7 @@ class FractalArucoPrecisionLander(Node):
             self._cmd(
                 1000, # MAV_CMD_DO_GIMBAL_MANAGER_CONFIGURE
                 p1=1.0,
-                p2=1.0,
+                p2=191.0,
             )
             self._gimbal_control_configured = True
 
@@ -959,7 +1136,55 @@ class FractalArucoPrecisionLander(Node):
         req.param7 = p7
         self.command_client.call_async(req)
 
+    def _now_sec(self) -> float:
+        return self.get_clock().now().nanoseconds * 1e-9
+
+    def _watchdog_abort_required(self) -> bool:
+        active_states = {
+            "HORIZONTAL_APPROACH",
+            "DESCEND_OVER_TARGET",
+            "TARGET_LOST",
+        }
+        if self.state not in active_states or not self.armed:
+            return False
+        if self.state == "LAND":
+            return False
+
+        now = self._now_sec()
+        status_age = now - self._last_status_time
+        pose_age = now - self._last_local_pose_time if self._last_local_pose_time else float("inf")
+
+        if status_age > 2.0:
+            self.get_logger().error(
+                f"MAVROS state is stale ({status_age:.1f}s) - requesting AUTO.LAND",
+                throttle_duration_sec=1.0,
+            )
+            return True
+
+        if self.mavros_connected and not self.offboard_active:
+            if self._offboard_loss_start is None:
+                self._offboard_loss_start = now
+                self.get_logger().warn(
+                    "OFFBOARD temporarily lost; waiting before AUTO.LAND watchdog action"
+                )
+                return False
+            if now - self._offboard_loss_start < self.cfg.OFFBOARD_LOSS_GRACE:
+                return False
+            self.get_logger().error("OFFBOARD lost while mission is active - requesting AUTO.LAND")
+            return True
+
+        if pose_age > 1.0:
+            self.get_logger().error(
+                f"Local position is stale ({pose_age:.1f}s) - requesting AUTO.LAND",
+                throttle_duration_sec=1.0,
+            )
+            return True
+
+        return False
+
     def _transition(self, new_state: str) -> None:
+        if new_state == self.state:
+            return
         if new_state == "LAND":
             self._disarm_retry_counter = 0
             self._last_land_wait_log = 0.0

@@ -2,7 +2,12 @@
 ros2_ws/build/
 ros2_ws/install/
 ros2_ws/log/
+build/
+install/
+log/
+real_camera_tracker/ros2_ws/
 aruco_build/
+flight_tests/
 search_frame.png
 scratch/
 
@@ -12,12 +17,15 @@ ros2_ws/src/px4_msgs/
 # Keep local project documents private; publish only the two approved images.
 docs/*
 !docs/marker.png
-!docs/apriltag_fsm.png
+!docs/FLIGHT_TEST.md
+!docs/fractal_aruco_fsm.dot
+!docs/fractal_aruco_fsm.png
 
 # Python cache
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
 
 # IDE
 .vscode/

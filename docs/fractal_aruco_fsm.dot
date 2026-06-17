@@ -1,0 +1,92 @@
+digraph FractalArucoFSM {
+  graph [
+    rankdir=TB,
+    bgcolor="white",
+    pad=0.35,
+    nodesep=0.45,
+    ranksep=0.62,
+    splines=polyline,
+    outputorder=edgesfirst,
+    fontname="Arial",
+    label="Fractal ArUco Precision Landing FSM (MAVROS)",
+    labelloc=t,
+    fontsize=28
+  ];
+
+  node [
+    shape=box,
+    style="rounded,filled",
+    color="#2f3b52",
+    penwidth=1.7,
+    fillcolor="#eef4ff",
+    fontname="Arial",
+    fontsize=18,
+    margin="0.16,0.10"
+  ];
+
+  edge [
+    color="#2f3b52",
+    penwidth=1.5,
+    arrowsize=0.8,
+    fontname="Arial",
+    fontsize=14
+  ];
+
+  start [label="START", shape=oval, fillcolor="#f5f5f5"];
+  init [label="INIT\npublish warmup setpoints"];
+  takeoff [label="TAKEOFF\nset OFFBOARD + arm\nclimb to cruise_alt"];
+  retry [label="Retry control\nset OFFBOARD\narm vehicle", fillcolor="#fff7df"];
+  gimbal [label="GIMBAL_DOWN\npitch gimbal -90 deg\nwait settle"];
+  fly_search [label="FLY_TO_SEARCH\nfly to search ENU\nhold cruise_alt"];
+  search [label="SEARCH\nhold search point\nwait confirmed target"];
+  approach [label="HORIZONTAL_APPROACH\nstream LANDING_TARGET\nservo XY at cruise_alt"];
+  descend [label="DESCEND_OVER_TARGET\nservo XY + descend\ninside gate: descend\noutside gate: pause / realign"];
+  lost [label="TARGET_LOST\nhold/reacquire\nwithout climb reset", fillcolor="#fff7df"];
+  land [label="LAND\nsend PX4 AUTO.LAND\nwait land detector"];
+  done [label="DONE", shape=oval, fillcolor="#eaf8ee"];
+
+  qgate [label="Tracker quality gate\nTRACKING + fresh pose\nconfirm counts", fillcolor="#eaf8ee"];
+  agate [label="Align gate\nerr <= dynamic radius\nfor confirm count", fillcolor="#eaf8ee"];
+  disarm [label="Disarm loop\nnormal disarm when landed\nforce-disarm only as fallback", fillcolor="#fff7df"];
+  watchdog [label="Watchdog fail-safe\nMAVROS / pose / OFFBOARD\noutside allowed grace", fillcolor="#ffecec"];
+
+  { rank=same; retry; takeoff; }
+  { rank=same; qgate; search; }
+  { rank=same; lost; descend; }
+  { rank=same; watchdog; land; }
+
+  start -> init;
+  init -> takeoff [label="WARMUP_SEC"];
+  takeoff -> retry [label="not armed\nor not OFFBOARD"];
+  retry -> takeoff;
+  takeoff -> gimbal [label="near cruise_alt"];
+  gimbal -> fly_search [label="settled"];
+  fly_search -> search [label="dist < 0.60 m"];
+
+  search -> qgate [label="target accepted"];
+  qgate -> search [label="not enough\nconfirmed frames"];
+  qgate -> approach [label="tracking >= 10\nready >= 10"];
+  search -> land [label="SEARCH_TIMEOUT"];
+
+  approach -> search [label="target not recent\nreset filter"];
+  approach -> agate [label="pose recent"];
+  agate -> approach [label="not centered"];
+  agate -> descend [label="centered"];
+  approach -> descend [label="ALIGN_TIMEOUT\ninside descent gate"];
+
+  descend -> lost [label="dropout"];
+  descend -> descend [label="guarded descent"];
+  descend -> search [label="drift persists\nabove commit"];
+  descend -> approach [label="drift persists\nbelow commit"];
+  descend -> land [label="final_alt reached\nor guarded commit"];
+
+  lost -> descend [label="reacquired"];
+  lost -> approach [label="reacquired\nfrom approach"];
+  lost -> lost [label="hold"];
+  lost -> search [label="loss grace expired\nabove commit"];
+
+  watchdog -> land [label="fail-safe land", style=dashed];
+  land -> disarm [label="AUTO.LAND sent\nstill armed"];
+  disarm -> land [label="retry"];
+  land -> done [label="not armed\nLANDING COMPLETE"];
+}

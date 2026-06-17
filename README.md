@@ -166,7 +166,7 @@ World ArUco sử dụng một marker ArUco đơn lẻ chuẩn (mặc định kí
 
 ## 3. Fractal ArUco Landing (MAVROS-based)
 
-Pipeline định vị hạ cánh chính xác sử dụng MAVROS. Tracker C++ xuất pose trong camera optical frame; lander lọc pose, bù camera offset, xoay theo yaw thân drone và điều khiển trong local ENU.
+Pipeline định vị hạ cánh chính xác sử dụng MAVROS. Tracker C++ xuất contract `/landing/target_camera` (`dib_msgs/LandingTarget6D`) trong camera optical frame với state `LOST/SEARCHING/TRACKING`; topic pose `/aruco_fractal_tracker/poses` được giữ cho debug. Lander lọc target, bù camera offset, xoay theo yaw thân drone và điều khiển trong local ENU.
 
 Cấu hình SITL hiện tại:
 
@@ -174,7 +174,7 @@ Cấu hình SITL hiện tại:
 marker:       0.50 m x 0.50 m
 camera:       1280 x 720, 30 Hz
 horizontal FOV: 1.4137 rad (81°)
-control loop: 20 Hz
+control loop: 30 Hz target, requirement >= 20 Hz
 ```
 Kích thước vật lý thực tế của từng tầng:
 Tầng ngoài cùng (Outer - Level 1): 50 cm (0.50 m)
@@ -217,6 +217,18 @@ pos_enu / target_enu / raw_enu / sp_enu đều là ENU
 
 ## Giám Sát và Kiểm Tra
 
+Quy trình nghiệm thu đầy đủ cho Fractal ArUco nằm ở:
+
+```bash
+~/PX4/examples/gimbal_simulation/docs/FLIGHT_TEST.md
+```
+
+FSM hiện tại của pipeline Fractal ArUco nằm ở:
+
+```bash
+~/PX4/examples/gimbal_simulation/docs/fractal_aruco_fsm.png
+```
+
 * **Xem luồng camera có telemetry HUD**:
   ```bash
   source /opt/ros/humble/setup.bash
@@ -233,7 +245,7 @@ pos_enu / target_enu / raw_enu / sp_enu đều là ENU
   ```bash
   ros2 topic hz /mavros/setpoint_position/local
   ```
-  *(Cần đạt khoảng ~20Hz khi đang ở chế độ Offboard)*
+  *(Timer điều khiển chạy 30Hz; kết quả đo nghiệm thu cần đạt >=20Hz khi đang ở chế độ Offboard.)*
 
 ---
 
@@ -246,11 +258,13 @@ source /opt/ros/humble/setup.bash
 ros2 topic hz /gimbal_camera
 ```
 
-Tracker pose:
+Tracker target và pose debug:
 
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
+ros2 topic hz /landing/target_camera
+ros2 topic echo --once /landing/target_camera
 ros2 topic hz /aruco_fractal_tracker/poses
 ros2 topic echo --once /aruco_fractal_tracker/poses
 ```

@@ -14,6 +14,7 @@ find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(dib_msgs REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(aruco REQUIRED)
@@ -44,6 +45,7 @@ ament_target_dependencies(aruco_fractal_tracker_node
   geometry_msgs 
   sensor_msgs 
   std_msgs
+  dib_msgs
   rclcpp_components 
   aruco 
   OpenCV
@@ -73,6 +75,7 @@ ament_target_dependencies(aruco_standard_tracker_node
   geometry_msgs 
   sensor_msgs 
   std_msgs
+  dib_msgs
   rclcpp_components 
   aruco 
   OpenCV
@@ -127,6 +130,7 @@ ament_export_dependencies(
   geometry_msgs 
   sensor_msgs 
   std_msgs
+  dib_msgs
   rclcpp_components 
   cv_bridge 
   aruco

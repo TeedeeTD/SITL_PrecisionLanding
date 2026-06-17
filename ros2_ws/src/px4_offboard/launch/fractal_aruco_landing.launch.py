@@ -66,13 +66,32 @@ def generate_launch_description():
         output='screen'
     )
 
-    # 4. C++ Tracker Node
+    # 4. Gazebo CameraInfo Bridge Node
+    camera_info_bridge_node = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        arguments=[
+            '/world/fractal_aruco_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo'
+        ],
+        remappings=[
+            ('/world/fractal_aruco_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/camera_info', '/gimbal_camera/camera_info')
+        ],
+        parameters=[{'use_sim_time': True}],
+        output='screen'
+    )
+
+    # 5. C++ Tracker Node
     tracker_node = Node(
         package='aruco_fractal_tracker',
         executable='aruco_fractal_tracker',
         parameters=[{
             'marker_configuration': LaunchConfiguration('marker_configuration'),
             'marker_size': 0.50,
+            'min_tracking_z': 0.15,
+            'max_tracking_z': 20.0,
+            'max_pose_jump_m': 2.0,
+            'acquire_good_frames': 8,
+            'lost_bad_frames': 10,
             'show_latency_overlay': True,
             'latency_warn_ms': 100.0,
             'use_sim_time': True,
@@ -85,12 +104,13 @@ def generate_launch_description():
             ('image_input_topic', '/gimbal_camera'),
             ('camera_info_topic', '/gimbal_camera/camera_info'),
             ('image_output_topic', '/landing/annotated_image'),
-            ('poses_output_topic', '/aruco_fractal_tracker/poses')
+            ('poses_output_topic', '/aruco_fractal_tracker/poses'),
+            ('target_output_topic', '/landing/target_camera')
         ],
         output='screen'
     )
 
-    # 5. MAVROS Lander Node
+    # 6. MAVROS Lander Node
     lander_node = Node(
         package='px4_offboard',
         executable='fractal_aruco_precision_lander',
@@ -99,13 +119,16 @@ def generate_launch_description():
             'search_x': 3.0,
             'search_y': 2.0,
             'cruise_alt': LaunchConfiguration('cruise_alt'),
+            'marker_size': 0.50,
             'camera_yaw_frame': 'body',
             'camera_x_to_body_east_sign': 1.0,
             'camera_y_to_body_north_sign': -1.0,
             'camera_offset_x': LaunchConfiguration('camera_offset_x'),
             'camera_offset_y': LaunchConfiguration('camera_offset_y'),
             'use_sim_time': True,
-            'pose_topic': '/aruco_fractal_tracker/poses'
+            'pose_topic': '/aruco_fractal_tracker/poses',
+            'target_topic': '/landing/target_camera',
+            'enable_pose_fallback': False
         }],
         output='screen'
     )
@@ -118,6 +141,7 @@ def generate_launch_description():
         mavros_launch,
         image_bridge_node,
         clock_bridge_node,
+        camera_info_bridge_node,
         tracker_node,
         lander_node
     ])
