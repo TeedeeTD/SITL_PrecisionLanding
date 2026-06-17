@@ -44,7 +44,7 @@ def generate_launch_description():
 
     marker_size_arg = DeclareLaunchArgument(
         'marker_size',
-        default_value='0.35',
+        default_value='0.50',
         description='Physical size of the marker in meters'
     )
 

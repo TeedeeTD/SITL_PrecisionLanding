@@ -104,7 +104,7 @@ def generate_launch_description():
         parameters=[{
             'dictionary': 'DICT_APRILTAG_25h9',
             'target_tag_id': LaunchConfiguration('target_tag_id'),
-            'marker_size': 0.35,
+            'marker_size': 0.50,
             'use_sim_time': True,
             'camera_x_to_body_east_sign': 1.0,
             'camera_y_to_body_north_sign': -1.0,
