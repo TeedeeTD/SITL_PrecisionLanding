@@ -112,7 +112,7 @@ source install/setup.bash
 ## Dọn Tiến Trình Cũ
 
 ```bash
-pkill -9 -f "gz sim|px4|MicroXRCEAgent|micro-xrce-dds-agent|ros_gz_image|ros_gz_bridge|aruco_fractal_tracker|fractal_aruco_precision_lander|apriltag_precision_lander|rqt_image_view"
+pkill -9 -f "gz sim|px4|mavros|tracker|lander|rqt_image_view|ros_gz"
 ```
 
 ---
