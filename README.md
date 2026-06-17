@@ -1,29 +1,37 @@
 # PX4 Gimbal Precision Landing
 
-Project này chứa hai pipeline hạ cánh chính xác cho PX4 Gazebo `x500_gimbal`:
+Project này chứa ba pipeline hạ cánh chính xác cho drone `x500_gimbal` trong mô phỏng Gazebo SITL, sử dụng **MAVROS** làm giao thức kết nối điều khiển chính:
 
-- **AprilTag landing**: dùng OpenCV AprilTag detector trong node Python (chạy trên nền uXRCE-DDS).
-- **Fractal ArUco landing**: dùng C++ `aruco_fractal_tracker` với marker fractal tùy chỉnh 50 cm, và điều khiển hạ cánh chính xác qua **MAVROS** trong hệ tọa độ ENU.
+1. **Fractal ArUco landing**: Sử dụng bộ tracker C++ `aruco_fractal_tracker` với cấu trúc marker lồng nhau (nested fractal marker) tùy chỉnh có kích thước ngoài cùng 50 cm.
+2. **Standard ArUco landing**: Bộ định vị Python linh hoạt (`aruco_tracker` & `aruco_precision_lander`) cho phép phát hiện các marker chuẩn từ nhiều thư viện (vd: `DICT_4X4_50`, `DICT_ARUCO_MIP_36h12`).
+3. **AprilTag landing**: Bộ định vị Python (`apriltag_tracker` & `apriltag_precision_lander`) hỗ trợ phát hiện AprilTag (vd: `tag36h11`).
 
-## Cấu Trúc
+---
 
-Đặt project trong PX4 checkout:
+## Kiến trúc: uXRCE-DDS vs MAVROS
 
+Trong cấu hình mô phỏng này, luồng truyền nhận thông tin được phân chia rõ ràng:
+* **uXRCE-DDS Agent**: Đóng vai trò là cầu nối trực tiếp, hiệu năng cao giữa PX4 Autopilot và ROS 2 dành cho các dữ liệu telemetry nội bộ và điều khiển gimbal gốc (gimbal control topics). 
+* **MAVROS**: Đóng vai trò là kênh giao tiếp điều khiển bay Offboard (local ENU setpoints, state monitoring, arming, mode change). Cả ba pipeline hạ cánh đều sử dụng MAVROS để gửi tọa độ điểm đích hạ cánh (landing target setpoints) và nhận phản hồi trạng thái từ bộ ước lượng của PX4.
+
+---
+
+## Cấu Trúc Thư Mục
+
+Đặt thư mục dự án trong cây thư mục PX4 checkout:
 ```text
 ~/PX4
 └── examples
     └── gimbal_simulation
 ```
 
-PX4 Gazebo load world/model từ:
-
+Khi chạy mô phỏng, Gazebo load world/model từ:
 ```text
 ~/PX4/Tools/simulation/gz/worlds
 ~/PX4/Tools/simulation/gz/models
 ```
 
-Sau khi clone hoặc sửa world/model, sync overlay:
-
+Sau khi clone hoặc chỉnh sửa world/model trong thư mục `gimbal_simulation/px4/`, đồng bộ hóa bằng `rsync`:
 ```bash
 cd ~/PX4
 rsync -a \
@@ -31,40 +39,23 @@ rsync -a \
   Tools/simulation/gz/
 ```
 
-Kiểm tra hai world chính:
+---
 
-```bash
-ls ~/PX4/Tools/simulation/gz/worlds/apriltag_landing.sdf
-ls ~/PX4/Tools/simulation/gz/worlds/fractal_aruco_landing.sdf
-ls ~/PX4/Tools/simulation/gz/models/fractal_aruco_marker/model.sdf
-```
+## Yêu Cầu Hệ Thống
 
-## Yêu Cầu
+* **ROS 2 Humble** và **Gazebo Garden/Fortress**
+* **Micro-XRCE-DDS-Agent** bản v2.4.2 (tương thích PX4)
+* **MAVROS** và **Geodesy** packages
+* OpenCV (`python3-opencv`) và các ROS bridges (`ros-humble-ros-gz-image`, `ros-humble-ros-gz-bridge`)
 
-Cần có:
-
-- PX4 Gazebo simulation chạy được.
-- PX4 `gz_x500_gimbal` chạy được.
-- ROS 2 Humble.
-- `MicroXRCEAgent` cho pipeline AprilTag.
-- MAVROS cho pipeline Fractal ArUco.
-- `ros_gz_image`, `cv_bridge`, `rqt_image_view`.
-- ArUco C++ library có `libaruco.so.3.1`.
-
-### Cài Micro-XRCE-DDS-Agent 2.4.2
-
-Nếu đang dùng bản snap cũ, gỡ trước:
-
+### Cài Đặt Micro-XRCE-DDS-Agent (v2.4.2)
+Nếu đang có bản agent cài từ snap cũ, hãy gỡ ra trước:
 ```bash
 sudo snap remove micro-xrce-dds-agent
 ```
 
-#### Option A: Build from Source (Recommended)
-
-Building from source is recommended as it avoids sandbox/network restrictions and works reliably with localhost-only configurations:
-
+Build agent v2.4.2 từ source để tránh các giới hạn quyền mạng của snap:
 ```bash
-# Clone branch v2.4.2 để tương thích với PX4
 git clone -b v2.4.2 https://github.com/eProsima/Micro-XRCE-DDS-Agent.git
 cd Micro-XRCE-DDS-Agent
 mkdir build && cd build
@@ -74,52 +65,12 @@ sudo make install
 sudo ldconfig /usr/local/lib/
 ```
 
-#### Option B: Build via ROS 2 Workspace (Colcon)
-
-Bypass bằng cách build trong ROS 2 workspace:
-
+Khởi chạy Agent:
 ```bash
-mkdir -p ~/px4_ros_uxrce_dds_ws/src
-cd ~/px4_ros_uxrce_dds_ws/src
-git clone -b v2.4.2 https://github.com/eProsima/Micro-XRCE-DDS-Agent.git
-
-cd ~/px4_ros_uxrce_dds_ws
-source /opt/ros/humble/setup.bash
-colcon build
-```
-
-Khi chạy agent với Option B, source workspace trước:
-
-```bash
-source /opt/ros/humble/setup.bash
-source ~/px4_ros_uxrce_dds_ws/install/local_setup.bash
 MicroXRCEAgent udp4 -p 8888
 ```
-#### Option C: Install via Snap (Alternative)
 
-```bash
-
-sudo snap install micro-xrce-dds-agent --classic
-
-```
-
-Once installed, you can start the agent using:
-
-```bash
-
-MicroXRCEAgent udp4 -p 8888
-
-```
-
-or:
-
-```bash
-
-micro-xrce-dds-agent udp4 -p 8888
-```
-
-### Cài package ROS 2 thường dùng
-
+### Cài đặt ROS 2 Dependencies
 ```bash
 sudo apt update
 sudo apt install -y \
@@ -136,210 +87,102 @@ sudo apt install -y \
 pip3 install pymavlink
 ```
 
-Nếu dùng `ROS_LOCALHOST_ONLY=1`, trong PX4 console chạy một lần:
+---
 
-```bash
-param set UXRCE_DDS_PTCFG 1
-```
-
-Sau đó restart PX4 SITL.
-
-## Build
-
-`px4_msgs` cần nằm trong workspace hoặc được source từ workspace khác:
+## Biên Dịch Không Gian Làm Việc (ROS 2 Workspace)
 
 ```bash
 cd ~/PX4/examples/gimbal_simulation/ros2_ws
 source /opt/ros/humble/setup.bash
 
-# Nếu chưa có px4_msgs:
-git clone https://github.com/PX4/px4_msgs.git src/px4_msgs
+# Clone px4_msgs nếu chưa có
+if [ ! -d "src/px4_msgs" ]; then
+  git clone https://github.com/PX4/px4_msgs.git src/px4_msgs
+fi
 
 colcon build --symlink-install
 source install/setup.bash
 ```
 
-Nếu tracker thiếu `libaruco.so.3.1`, kiểm tra:
+---
 
-```bash
-ldd install/aruco_fractal_tracker/lib/aruco_fractal_tracker/aruco_fractal_tracker | grep aruco
-```
+## Hướng Dẫn Chạy Mô Phỏng & Hạ Cánh
 
-Nếu chưa resolve tới `/home/ducanh/.local/lib/libaruco.so.3.1`, rebuild tracker:
-
-```bash
-cd ~/PX4/examples/gimbal_simulation/ros2_ws
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-colcon build --symlink-install --packages-select aruco_fractal_tracker --cmake-clean-cache
-source install/setup.bash
-```
-
-## Dọn Tiến Trình Cũ
-
+Trước khi chạy phiên mô phỏng mới, hãy dọn dẹp các tiến trình cũ để tránh xung đột cổng:
 ```bash
 pkill -9 -f "gz sim|px4|MicroXRCEAgent|micro-xrce-dds-agent|ros_gz_image|ros_gz_bridge|aruco_fractal_tracker|fractal_aruco_precision_lander|apriltag_precision_lander|rqt_image_view"
 ```
 
-## AprilTag Landing
+### 1. Mô phỏng Fractal ArUco Landing
+Sử dụng marker Fractal lồng ghép đặc biệt để duy trì khả năng bám bắt mục tiêu liên tục từ độ cao 10m xuống đến mặt đất.
 
-World AprilTag có bốn target `tag25h9`:
+* **Terminal 1: Khởi động Gazebo & PX4**
+  ```bash
+  cd ~/PX4
+  PX4_GZ_WORLD=fractal_aruco_landing PX4_GZ_NO_FOLLOW=1 make px4_sitl gz_x500_gimbal
+  ```
 
-```text
-tag 0: x= 3.0, y= 2.0
-tag 1: x= 3.0, y=-2.0
-tag 2: x=-3.0, y= 2.0
-tag 3: x=-3.0, y=-2.0
-```
+* **Terminal 2: Chạy MAVROS & Landing Nodes**
+  ```bash
+  source /opt/ros/humble/setup.bash
+  source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
+  ros2 launch px4_offboard fractal_aruco_landing.launch.py
+  ```
 
-Terminal 1:
+---
 
-```bash
-cd ~/PX4
-PX4_GZ_WORLD=apriltag_landing PX4_GZ_NO_FOLLOW=1 make px4_sitl gz_x500_gimbal
-```
+### 2. Mô phỏng Standard ArUco Landing
+Sử dụng một marker ArUco đơn lẻ chuẩn (mặc định kích thước `0.35m`). Tích hợp bộ lọc ngưỡng kép (Double-pass Otsu) chống nhiễu và cơ chế **Low-altitude Land Commitment** (tự động chuyển sang `LAND` dưới 1.5m khi tag đi ra ngoài tầm nhìn của camera).
 
-Terminal 2:
+* **Terminal 1: Khởi động Gazebo & PX4**
+  ```bash
+  cd ~/PX4
+  PX4_GZ_WORLD=aruco_landing PX4_GZ_NO_FOLLOW=1 make px4_sitl gz_x500_gimbal
+  ```
 
-```bash
-source /opt/ros/humble/setup.bash
-source ~/px4_ros_uxrce_dds_ws/install/local_setup.bash
-MicroXRCEAgent udp4 -p 8888
-```
+* **Terminal 2: Chạy MAVROS & Landing Nodes**
+  ```bash
+  source /opt/ros/humble/setup.bash
+  source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
+  ros2 launch px4_offboard aruco_landing.launch.py dictionary:=DICT_4X4_50 marker_size:=0.35
+  ```
 
-Terminal 3:
+---
 
-```bash
-source /opt/ros/humble/setup.bash
+### 3. Mô phỏng AprilTag Landing
+Sử dụng một AprilTag đơn lẻ (mặc định kích thước `0.35m`, loại `tag36h11` hoặc tương tự). Tích hợp bộ lọc ngưỡng kép (Double-pass Otsu) và cơ chế **Low-altitude Land Commitment**.
 
-ros2 run ros_gz_image image_bridge \
-  "/world/apriltag_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image" \
-  --ros-args \
-  -r "/world/apriltag_landing/model/x500_gimbal_0/link/camera_link/sensor/camera/image:=/gimbal_camera"
-```
+* **Terminal 1: Khởi động Gazebo & PX4**
+  ```bash
+  cd ~/PX4
+  PX4_GZ_WORLD=apriltag_landing PX4_GZ_NO_FOLLOW=1 make px4_sitl gz_x500_gimbal
+  ```
 
-Terminal 4:
+* **Terminal 2: Chạy MAVROS & Landing Nodes**
+  ```bash
+  source /opt/ros/humble/setup.bash
+  source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
+  ros2 launch px4_offboard apriltag_landing.launch.py target_tag_id:=0 marker_size:=0.35
+  ```
 
-```bash
-source /opt/ros/humble/setup.bash
-source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
+---
 
-ros2 run px4_offboard apriltag_precision_lander --ros-args -p target_tag_id:=0
-```
+## Giám Sát và Kiểm Tra
 
-## Fractal ArUco Landing (MAVROS-based)
+* **Xem luồng camera có telemetry HUD**:
+  ```bash
+  source /opt/ros/humble/setup.bash
+  ros2 run rqt_image_view rqt_image_view
+  ```
+  Chọn topic `/landing/annotated_image` để xem hình ảnh từ camera gimbal vẽ đè các chỉ số FPS, trạng thái FSM hiện tại, tọa độ bám bắt mục tiêu và độ trễ.
+  
+* **Kiểm tra trạng thái FSM của Lander**:
+  ```bash
+  ros2 topic echo /lander/state
+  ```
 
-Pipeline định vị hạ cánh chính xác sử dụng MAVROS thay cho uXRCE-DDS. Tracker C++ xuất pose trong camera optical frame; lander lọc pose, bù camera offset, xoay theo yaw thân drone và điều khiển trong local ENU.
-
-Cấu hình SITL hiện tại:
-
-```text
-marker:       0.50 m x 0.50 m
-camera:       1280 x 720, 30 Hz
-horizontal FOV: 1.2 rad
-control loop: 20 Hz
-```
-
-`model.sdf`, `marker_size` trong launch và marker vật lý phải luôn dùng cùng kích thước. Detector sử dụng `custom_fractal.yml`; file này được sync sang PX4 cùng model.
-
-### Terminal 1: Khởi động PX4 SITL
-```bash
-cd ~/PX4
-PX4_GZ_WORLD=fractal_aruco_landing PX4_GZ_NO_FOLLOW=1 make px4_sitl gz_x500_gimbal
-```
-
-### Terminal 2: Khởi động toàn bộ cụm ROS 2 Nodes (Unified Launch File)
-Chạy lệnh duy nhất để khởi động đồng thời MAVROS, các Gazebo bridges (image và clock), C++ Tracker, và Python Lander:
-```bash
-source /opt/ros/humble/setup.bash
-source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
-ros2 launch px4_offboard fractal_aruco_landing.launch.py
-```
-
-Nếu PX4 checkout không nằm tại `~/PX4`, truyền đường dẫn cấu hình marker:
-
-```bash
-ros2 launch px4_offboard fractal_aruco_landing.launch.py \
-  marker_configuration:=/absolute/path/to/custom_fractal.yml
-```
-
-Controller dùng ENU cho logic hạ cánh:
-
-```text
-search_x = East
-search_y = North
-pos_enu / target_enu / raw_enu / sp_enu đều là ENU
-```
-
-### Xem và Giám Sát:
-- **Ảnh Annotated camera & Latency:** Mở `ros2 run rqt_image_view rqt_image_view` và chọn topic `/landing/annotated_image`.
-- **Tần số setpoint:** `ros2 topic hz /mavros/setpoint_position/local` (phải đạt ~20 Hz trong khi bay Offboard).
-- **Trạng thái MAVROS:** `ros2 topic echo --once /mavros/state`
-- **Trạng thái landing FSM:** `ros2 topic echo /lander/state`
-- **Pose UAV ENU:** `ros2 topic echo --once /mavros/local_position/pose`
-
-## Xem Camera
-
-```bash
-source /opt/ros/humble/setup.bash
-ros2 run rqt_image_view rqt_image_view
-```
-
-Chọn:
-
-```text
-/landing/annotated_image
-```
-
-## Kiểm Tra Nhanh
-
-Camera bridge:
-
-```bash
-source /opt/ros/humble/setup.bash
-ros2 topic hz /gimbal_camera
-```
-
-Tracker pose:
-
-```bash
-source /opt/ros/humble/setup.bash
-source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
-ros2 topic hz /aruco_fractal_tracker/poses
-ros2 topic echo --once /aruco_fractal_tracker/poses
-```
-
-MAVROS topics cho pipeline Fractal:
-
-```bash
-source /opt/ros/humble/setup.bash
-source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
-ros2 topic hz /mavros/setpoint_position/local
-ros2 topic echo --once /mavros/state
-ros2 topic echo --once /mavros/extended_state
-ros2 topic echo --once /mavros/local_position/pose
-```
-
-## Dấu Hiệu Thành Công
-
-Fractal landing thành công khi log có dạng:
-
-```text
-Fractal marker detected
-State: SEARCH -> HORIZONTAL_APPROACH
-State: HORIZONTAL_APPROACH -> DESCEND_OVER_TARGET
-Fractal final altitude reached
-PX4 land detector reports landed
-LANDING COMPLETE
-```
-
-Không dùng force-disarm làm tiêu chuẩn thành công khi chạy thật.
-
-## Ghi Chú
-
-- AprilTag vẫn là pipeline riêng và giữ nguyên.
-- Fractal ArUco là pipeline ArUco chính của project.
-- Với `fractal_aruco_landing`, dùng `marker_size:=0.50`.
-- Nếu sau này đổi physical marker size trong `fractal_aruco_marker/model.sdf`, phải đổi `marker_size` tương ứng.
-- `command 520 unsupported` là capability request MAVLink cũ từ client và không phải lệnh điều khiển landing.
-- Trước mỗi lần chạy lại, dừng các tiến trình PX4/MAVROS cũ để tránh giữ UDP endpoint hoặc quyền điều khiển gimbal từ phiên trước.
+* **Kiểm tra tần số Setpoint gửi đến PX4**:
+  ```bash
+  ros2 topic hz /mavros/setpoint_position/local
+  ```
+  *(Cần đạt khoảng ~20Hz khi đang ở chế độ Offboard)*

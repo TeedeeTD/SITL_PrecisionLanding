@@ -25,6 +25,9 @@ setup(
             'camera_viewer    = px4_offboard.camera_viewer:main',
             'fractal_aruco_precision_lander = px4_offboard.fractal_aruco_precision_lander:main',
             'apriltag_precision_lander = px4_offboard.apriltag_precision_lander:main',
+            'apriltag_tracker = px4_offboard.apriltag_tracker:main',
+            'aruco_precision_lander = px4_offboard.aruco_precision_lander:main',
+            'aruco_tracker = px4_offboard.aruco_tracker:main',
         ],
     },
 )

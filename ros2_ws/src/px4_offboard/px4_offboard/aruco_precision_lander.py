@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""AprilTag precision landing for PX4 x500_gimbal using MAVROS.
+"""ArUco precision landing for PX4 x500_gimbal using MAVROS.
 
-This node consumes PoseStamped tracker poses from the AprilTag tracker,
+This node consumes PoseStamped tracker poses from the ArUco tracker,
 performs visual servoing in local ENU, and publishes local ENU position setpoints
 and local NED landing targets to MAVROS.
 """
@@ -25,7 +25,7 @@ from mavros_msgs.msg import State, ExtendedState, LandingTarget
 from mavros_msgs.srv import CommandBool, SetMode, CommandLong
 
 
-class AprilTagConfig:
+class ArucoConfig:
     # Flight geometry
     CRUISE_ALT = 15.0
     SEARCH_FRAME = "enu"
@@ -84,10 +84,10 @@ class AprilTagConfig:
     FORCE_DISARM_MAGIC = 21196.0
 
 
-class AprilTagPrecisionLander(Node):
+class ArucoPrecisionLander(Node):
     def __init__(self) -> None:
-        super().__init__("apriltag_precision_lander")
-        self.cfg = AprilTagConfig
+        super().__init__("aruco_precision_lander")
+        self.cfg = ArucoConfig
 
         self._declare_parameters()
         self._load_parameters()
@@ -183,7 +183,7 @@ class AprilTagPrecisionLander(Node):
 
         self.timer = self.create_timer(1.0 / self.ctrl_hz, self._loop)
 
-        self.get_logger().info("AprilTag PrecisionLander (MAVROS) ready - state: INIT")
+        self.get_logger().info("ArUco PrecisionLander (MAVROS) ready - state: INIT")
         self.get_logger().info(
             f"Search input ({self.search_frame}): x={self.search_input_xy[0]:.2f}m, "
             f"y={self.search_input_xy[1]:.2f}m"
@@ -195,7 +195,7 @@ class AprilTagPrecisionLander(Node):
             "Controller/setpoint frame: ROS ENU; MAVROS owns ENU -> PX4 NED"
         )
         self.get_logger().info(f"Cruise altitude: {self.cruise_alt:.1f}m")
-        self.get_logger().info(f"AprilTag tracker pose topic: {self.pose_topic}")
+        self.get_logger().info(f"ArUco tracker pose topic: {self.pose_topic}")
         self.get_logger().info(
             f"Vision frame: camera optical -> {self.camera_yaw_frame} ENU, "
             f"signs x/east={self.camera_x_to_east_sign:+.0f}, "
@@ -209,7 +209,7 @@ class AprilTagPrecisionLander(Node):
         self.declare_parameter("search_x", cfg.SEARCH_ENU[0])
         self.declare_parameter("search_y", cfg.SEARCH_ENU[1])
         self.declare_parameter("search_frame", cfg.SEARCH_FRAME)
-        self.declare_parameter("pose_topic", "/apriltag_tracker/pose")
+        self.declare_parameter("pose_topic", "/aruco_tracker/pose")
         self.declare_parameter("camera_x_to_body_east_sign", cfg.CAMERA_X_TO_ENU_EAST_SIGN)
         self.declare_parameter("camera_y_to_body_north_sign", cfg.CAMERA_Y_TO_ENU_NORTH_SIGN)
         self.declare_parameter("camera_yaw_frame", cfg.CAMERA_YAW_FRAME)
@@ -445,7 +445,7 @@ class AprilTagPrecisionLander(Node):
         )
         dist = float(np.linalg.norm(self.pos_enu[:2] - self.search_enu_xy))
         if dist < 0.60:
-            self.get_logger().info("Arrived at search area - starting AprilTag search")
+            self.get_logger().info("Arrived at search area - starting ArUco search")
             self._reset_visual_filter(clear_pose_time=True)
             self._search_start = time.time()
             self._transition("SEARCH")
@@ -457,7 +457,7 @@ class AprilTagPrecisionLander(Node):
         )
         if self._pose_recent():
             self.get_logger().info(
-                f"AprilTag marker detected: tvec=[{self.last_pose_tvec[0]:.2f}, "
+                f"ArUco marker detected: tvec=[{self.last_pose_tvec[0]:.2f}, "
                 f"{self.last_pose_tvec[1]:.2f}, {self.last_pose_tvec[2]:.2f}]"
             )
             self._align_start = time.time()
@@ -476,7 +476,7 @@ class AprilTagPrecisionLander(Node):
 
     def _state_horizontal_approach(self) -> None:
         if not self._pose_recent():
-            self._start_target_lost("AprilTag target lost during horizontal approach")
+            self._start_target_lost("ArUco target lost during horizontal approach")
             return
 
         self._send_current_landing_target()
@@ -490,12 +490,12 @@ class AprilTagPrecisionLander(Node):
             self._centered_count = 0
 
         if self._target_counter % self.ctrl_hz == 0:
-            self._log_guidance("AprilTag visual align", align_radius)
+            self._log_guidance("ArUco visual align", align_radius)
         self._target_counter += 1
 
         if self._centered_count >= self.align_confirm_count:
             self.get_logger().info(
-                f"AprilTag target inside dynamic align gate ({align_radius:.2f}m) - descending"
+                f"ArUco target inside dynamic align gate ({align_radius:.2f}m) - descending"
             )
             self._target_counter = 0
             self._centered_count = 0
@@ -517,7 +517,7 @@ class AprilTagPrecisionLander(Node):
                 self._transition("DESCEND_OVER_TARGET")
                 return
             self.get_logger().warn(
-                f"AprilTag visual align not centered yet: err={self.target_rel_norm:.2f}m "
+                f"ArUco visual align not centered yet: err={self.target_rel_norm:.2f}m "
                 f"gate={align_radius:.2f}m"
             )
             self._align_start = time.time()
@@ -525,7 +525,7 @@ class AprilTagPrecisionLander(Node):
     def _state_descend_over_target(self) -> None:
         if not self._pose_recent():
             self._start_target_lost(
-                "AprilTag target lost during visual descent",
+                "ArUco target lost during visual descent",
                 search_required=False,
             )
             return
@@ -555,7 +555,7 @@ class AprilTagPrecisionLander(Node):
             self._descent_drift_count += 1
             self._descent_z_sp = float(self.pos_enu[2])
             self.get_logger().warn(
-                f"AprilTag descent paused for realign: err={self.target_rel_norm:.2f}m "
+                f"ArUco descent paused for realign: err={self.target_rel_norm:.2f}m "
                 f"> gate={descent_radius:.2f}m count={self._descent_drift_count}",
                 throttle_duration_sec=1.0,
             )
@@ -570,19 +570,19 @@ class AprilTagPrecisionLander(Node):
 
         if self._target_counter % self.ctrl_hz == 0:
             phase = "descending" if descent_allowed else "align-hold"
-            self._log_guidance(f"AprilTag visual descent ({phase})", descent_radius)
+            self._log_guidance(f"ArUco visual descent ({phase})", descent_radius)
         self._target_counter += 1
 
         if self.pos_enu[2] <= self.final_alt + 0.05:
             self.get_logger().info(
-                f"AprilTag final altitude reached ({self.final_alt:.2f}m) - switching to PX4 land"
+                f"ArUco final altitude reached ({self.final_alt:.2f}m) - switching to PX4 land"
             )
             self._transition("LAND")
 
     def _state_target_lost(self) -> None:
         if self.pos_enu[2] < 1.5:
             self.get_logger().info(
-                f"AprilTag target lost at low altitude ({self.pos_enu[2]:.2f}m < 1.5m) - switching to LAND"
+                f"ArUco target lost at low altitude ({self.pos_enu[2]:.2f}m < 1.5m) - switching to LAND"
             )
             self._transition("LAND")
             return
@@ -596,7 +596,7 @@ class AprilTagPrecisionLander(Node):
                 if self._target_lost_from_state == "DESCEND_OVER_TARGET"
                 else "HORIZONTAL_APPROACH"
             )
-            self.get_logger().info(f"AprilTag target reacquired - resuming {resume}")
+            self.get_logger().info(f"ArUco target reacquired - resuming {resume}")
             self._target_lost_start = None
             self._target_lost_from_state = None
             self._target_counter = 0
@@ -614,7 +614,7 @@ class AprilTagPrecisionLander(Node):
             self.sp_enu = np.array([hold_xy[0], hold_xy[1], float(self.pos_enu[2])], dtype=float)
             if self._target_counter % self.ctrl_hz == 0:
                 self.get_logger().warn(
-                    f"AprilTag target temporarily lost - holding last visual setpoint "
+                    f"ArUco target temporarily lost - holding last visual setpoint "
                     f"{elapsed:.1f}s/{self.cfg.TARGET_LOSS_GRACE:.1f}s"
                 )
             self._target_counter += 1
@@ -628,7 +628,7 @@ class AprilTagPrecisionLander(Node):
         alt_err = abs(self.pos_enu[2] - self.cruise_alt)
         if self._target_counter % self.ctrl_hz == 0:
             self.get_logger().warn(
-                f"AprilTag target lost - returning to search pose: dist={dist:.2f}m "
+                f"ArUco target lost - returning to search pose: dist={dist:.2f}m "
                 f"alt_err={alt_err:.2f}m"
             )
         self._target_counter += 1
@@ -796,7 +796,7 @@ class AprilTagPrecisionLander(Node):
     def _start_target_lost(self, reason: str, search_required: bool = True) -> None:
         if self.pos_enu[2] < 1.5:
             self.get_logger().info(
-                f"AprilTag target lost at low altitude ({self.pos_enu[2]:.2f}m < 1.5m) - switching to LAND"
+                f"ArUco target lost at low altitude ({self.pos_enu[2]:.2f}m < 1.5m) - switching to LAND"
             )
             self._transition("LAND")
             return
@@ -1009,7 +1009,7 @@ class AprilTagPrecisionLander(Node):
 
 def main(args=None) -> None:
     rclpy.init(args=args)
-    node = AprilTagPrecisionLander()
+    node = ArucoPrecisionLander()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

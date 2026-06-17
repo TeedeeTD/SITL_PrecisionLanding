@@ -90,22 +90,5 @@
       <pose>3.0 2.0 0 0 0 0</pose>
     </include>
 
-    <include>
-      <uri>model://apriltag_1</uri>
-      <name>landing_pad_tag_1</name>
-      <pose>3.0 -2.0 0 0 0 0</pose>
-    </include>
-
-    <include>
-      <uri>model://apriltag_2</uri>
-      <name>landing_pad_tag_2</name>
-      <pose>-3.0 2.0 0 0 0 0</pose>
-    </include>
-
-    <include>
-      <uri>model://apriltag_3</uri>
-      <name>landing_pad_tag_3</name>
-      <pose>-3.0 -2.0 0 0 0 0</pose>
-    </include>
   </world>
 </sdf>
