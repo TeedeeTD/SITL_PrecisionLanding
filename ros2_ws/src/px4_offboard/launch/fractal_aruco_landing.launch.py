@@ -1,9 +1,7 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
-from launch_xml.launch_description_sources import XMLLaunchDescriptionSource
-from ament_index_python.packages import get_package_share_directory
 import os
 
 def generate_launch_description():
@@ -35,18 +33,7 @@ def generate_launch_description():
         description='Camera physical Y offset relative to drone center in body FLU frame'
     )
 
-    # 1. Include MAVROS px4.launch
-    mavros_dir = get_package_share_directory('mavros')
-    mavros_launch = IncludeLaunchDescription(
-        XMLLaunchDescriptionSource(
-            os.path.join(mavros_dir, 'launch', 'px4.launch')
-        ),
-        launch_arguments={
-            'fcu_url': 'udp://:14540@127.0.0.1:14580',
-        }.items()
-    )
-
-    # 2. Gazebo Image Bridge Node
+    # 1. Gazebo Image Bridge Node
     image_bridge_node = Node(
         package='ros_gz_image',
         executable='image_bridge',
@@ -58,7 +45,7 @@ def generate_launch_description():
         output='screen'
     )
 
-    # 3. Gazebo Clock Bridge Node
+    # 2. Gazebo Clock Bridge Node
     clock_bridge_node = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
@@ -66,7 +53,7 @@ def generate_launch_description():
         output='screen'
     )
 
-    # 4. Gazebo CameraInfo Bridge Node
+    # 3. Gazebo CameraInfo Bridge Node
     camera_info_bridge_node = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
@@ -80,7 +67,7 @@ def generate_launch_description():
         output='screen'
     )
 
-    # 5. C++ Tracker Node
+    # 4. C++ Tracker Node
     tracker_node = Node(
         package='aruco_fractal_tracker',
         executable='aruco_fractal_tracker',
@@ -110,7 +97,7 @@ def generate_launch_description():
         output='screen'
     )
 
-    # 6. MAVROS Lander Node
+    # 5. MAVROS Lander Node. MAVROS itself is launched separately.
     lander_node = Node(
         package='px4_offboard',
         executable='fractal_aruco_precision_lander',
@@ -138,7 +125,6 @@ def generate_launch_description():
         cruise_alt_arg,
         camera_offset_x_arg,
         camera_offset_y_arg,
-        mavros_launch,
         image_bridge_node,
         clock_bridge_node,
         camera_info_bridge_node,

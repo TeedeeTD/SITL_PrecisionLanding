@@ -190,12 +190,41 @@ Tầng trong cùng (Inner - Level 3): 3.125 cm (0.03125 m)
   PX4_GZ_WORLD=fractal_aruco_landing PX4_GZ_NO_FOLLOW=1 make px4_sitl gz_x500_gimbal
   ```
 
-* **Terminal 2: Khởi động toàn bộ cụm ROS 2 Nodes (Unified Launch File)**
+* **Terminal 2: Chạy MAVROS một lần và giữ nguyên**
 
 ```bash
-  source /opt/ros/humble/setup.bash
-  source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
-  ros2 launch px4_offboard fractal_aruco_landing.launch.py
+source /opt/ros/humble/setup.bash
+ros2 launch mavros px4.launch fcu_url:=udp://:14540@127.0.0.1:14580
+```
+
+Kiểm tra MAVROS đã nối PX4:
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
+ros2 topic echo --once /mavros/state
+```
+
+Kỳ vọng:
+
+```text
+connected: true
+```
+
+* **Terminal 3: Khởi động bridge camera, tracker và lander**
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
+ros2 launch px4_offboard fractal_aruco_landing.launch.py
+```
+
+`fractal_aruco_landing.launch.py` không khởi động MAVROS. Khi cần sửa/restart tracker hoặc lander, chỉ restart Terminal 3. Không restart Terminal 2, như vậy PX4 vẫn nhận heartbeat mission computer từ MAVROS liên tục.
+
+Nếu restart MAVROS trong lúc đang bay hoặc đang giữ OFFBOARD, QGroundControl/PX4 có thể báo:
+
+```text
+Critical: Connection to mission computer lost
 ```
 
 Nếu PX4 checkout không nằm tại `~/PX4`, truyền đường dẫn cấu hình marker:
@@ -305,4 +334,5 @@ Không dùng force-disarm làm tiêu chuẩn thành công khi chạy thật.
 - Thống nhất kích thước tất cả các marker chính về `0.50m` (`marker_size:=0.50`).
 - Nếu sau này đổi physical marker size trong `model.sdf`, phải đổi `marker_size` tương ứng trong file launch.
 - `command 520 unsupported` là capability request MAVLink cũ từ client và không phải lệnh điều khiển landing.
-- Trước mỗi lần chạy lại, dừng các tiến trình PX4/MAVROS cũ để tránh giữ UDP endpoint hoặc quyền điều khiển gimbal từ phiên trước.
+- Trước một lần chạy sạch từ đầu, dừng các tiến trình PX4/MAVROS cũ để tránh giữ UDP endpoint hoặc quyền điều khiển gimbal từ phiên trước.
+- Khi đang debug giữa chuyến bay hoặc đang giữ OFFBOARD, không restart MAVROS. Hãy giữ Terminal 2 chạy MAVROS riêng và chỉ restart Terminal 3 với `ros2 launch px4_offboard fractal_aruco_landing.launch.py`.
