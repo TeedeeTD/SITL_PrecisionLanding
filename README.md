@@ -252,10 +252,23 @@ Quy trình nghiệm thu đầy đủ cho Fractal ArUco nằm ở:
 ~/PX4/examples/gimbal_simulation/docs/FLIGHT_TEST.md
 ```
 
-FSM hiện tại của pipeline Fractal ArUco nằm ở:
+FSM hiện tại của pipeline Fractal ArUco độc lập nằm ở:
 
 ```bash
 ~/PX4/examples/gimbal_simulation/docs/fractal_aruco_fsm.png
+```
+
+Proposal FSM cho hướng tích hợp mission-driven với `box_manager` nằm ở:
+
+```bash
+~/PX4/examples/gimbal_simulation/docs/main_fsm.mmd
+~/PX4/examples/gimbal_simulation/docs/precision_landing_fsm.mmd
+```
+
+Kế hoạch mô phỏng SITL cho box-driven hybrid landing nằm ở:
+
+```bash
+~/PX4/examples/gimbal_simulation/docs/BOX_HYBRID_SITL_PLAN.md
 ```
 
 * **Xem luồng camera có telemetry HUD**:

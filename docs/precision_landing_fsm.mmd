@@ -1,0 +1,36 @@
+flowchart TB
+    subgraph PL["PX4 PRECISION LANDING - Visual sub-FSM"]
+        direction LR
+
+        SEARCH["Search\n(wait for marker)"]
+        APPROACH["Horizontal_approach\n(servo XY over target\nhold altitude)"]
+        YAW["Yaw_align\n(optional first implementation)\nmatch box/marker yaw"]
+        DESCEND["Descend_over_target\n(hold XY + yaw\ndescend with gates)"]
+        LAND["Land\n(PX4 AUTO.LAND\nor low-altitude commit)"]
+        FLIGHT["Flight_in_progress\n(wait land detector)"]
+        LOST["Target_lost\n(hold last visual setpoint\nwait reacquire)"]
+        FALLBACK["Fallback\n(GPS/RTK landing\nor AUTO.LAND)"]
+
+        SEARCH -->|"marker tracked >= N frames"| APPROACH
+        SEARCH -->|"search timeout"| FALLBACK
+
+        APPROACH -->|"xy_error <= xy_gate"| YAW
+        APPROACH -->|"target lost"| LOST
+
+        YAW -->|"yaw_error <= yaw_gate\nfor confirm count"| DESCEND
+        YAW -->|"target lost"| LOST
+        YAW -->|"yaw timeout\n(optional skip)"| DESCEND
+
+        DESCEND -->|"final_alt <= 1 m"| LAND
+        DESCEND -->|"target lost"| LOST
+        DESCEND -->|"drift persists above commit_alt"| SEARCH
+
+        LAND -->|"AUTO.LAND sent"| FLIGHT
+        FLIGHT -->|"landed_state == ON_GROUND"| DONE["Done"]
+
+        LOST -->|"reacquired from approach"| APPROACH
+        LOST -->|"reacquired from descent"| DESCEND
+        LOST -->|"timeout"| FALLBACK
+
+        FALLBACK -->|"landed_state == ON_GROUND"| DONE
+    end

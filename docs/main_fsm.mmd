@@ -1,0 +1,38 @@
+flowchart TB
+    subgraph MAIN["MAIN FSM - Box-driven hybrid precision landing"]
+        direction LR
+
+        IDLE["Idle\n(no active mission)"]
+        MISSION["Drone mission\n(PX4 flies GPS/RTK mission\nfrom uploaded mission)"]
+        PRELANDING["Prelanding check\n(gimbal down\ncamera + CameraInfo OK\ntracker alive)"]
+        PL["PX4 precision landing\n(visual target refinement)"]
+        FALLBACK["Fallback GPS/RTK landing\n(or hold / AUTO.LAND)"]
+        DONE["Done\n(drone landed\nbox securing_drone)"]
+
+        IDLE -->|"mission received\nbox_id != 0"| MISSION
+        MISSION -->|"wp_seq == lastWP\nor distance to box < gate"| PRELANDING
+        PRELANDING -->|"marker detected\nbox_state == WAITING_FOR_LANDING"| PL
+        PRELANDING -->|"box/tracker/camera failed"| FALLBACK
+        PL -->|"fallback condition"| FALLBACK
+        PL -->|"landed_state == ON_GROUND"| DONE
+        FALLBACK -->|"landed_state == ON_GROUND"| DONE
+        DONE -->|"new mission cycle"| IDLE
+    end
+
+    subgraph BOX["BOX FSM alignment"]
+        direction LR
+        BOX_IDLE["EMPTY / IDLE"]
+        BOX_PREP["PREPARING_FOR_LANDING\n(open lid\nrelease clamp)"]
+        BOX_WAIT["WAITING_FOR_LANDING\n(box ready)"]
+        BOX_SECURE["SECURING_DRONE\n(close clamp\nclose lid)"]
+        BOX_CHARGE["CHARGING / IDLE"]
+
+        BOX_IDLE -->|"REQUEST_LANDING"| BOX_PREP
+        BOX_PREP -->|"lid opened\nclamp opened"| BOX_WAIT
+        BOX_WAIT -->|"drone landed"| BOX_SECURE
+        BOX_SECURE -->|"secured"| BOX_CHARGE
+    end
+
+    PRELANDING -.->|"send REQUEST_LANDING"| BOX_PREP
+    BOX_WAIT -.->|"telemetry gate"| PRELANDING
+    DONE -.->|"landed telemetry"| BOX_SECURE
