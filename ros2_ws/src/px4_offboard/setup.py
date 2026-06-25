@@ -26,6 +26,8 @@ setup(
             'fractal_aruco_precision_lander = px4_offboard.fractal_aruco_precision_lander:main',
             'apriltag_precision_lander = px4_offboard.apriltag_precision_lander:main',
             'aruco_precision_lander = px4_offboard.aruco_precision_lander:main',
+            'box_hybrid_precision_lander = px4_offboard.box_hybrid_precision_lander:main',
+            'sim_box_manager = px4_offboard.sim_box_manager:main',
         ],
     },
 )

@@ -242,6 +242,51 @@ search_y = North
 pos_enu / target_enu / raw_enu / sp_enu đều là ENU
 ```
 
+### 3.1 Box Hybrid Landing (SITL prototype)
+
+Pipeline thử nghiệm cho flow `box_manager + precision landing` dùng cùng PX4 SITL, MAVROS và fractal tracker, nhưng thay lander cũ bằng FSM hybrid:
+
+```text
+IDLE -> DRONE_MISSION -> PRELANDING_CHECK -> WAIT_BOX_READY
+     -> SEARCH -> HORIZONTAL_APPROACH -> YAW_ALIGN
+     -> DESCEND_OVER_TARGET -> LAND -> FLIGHT_IN_PROGRESS -> DONE
+```
+
+Trong prototype này, box thật được thay bằng `sim_box_manager`, publish `/sim_box/state`:
+
+```text
+IDLE -> PREPARING_FOR_LANDING -> WAITING_FOR_LANDING
+```
+
+Chạy PX4 SITL và MAVROS giống mục Fractal ArUco Landing ở trên. Terminal 3 đổi sang launch hybrid:
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
+ros2 launch px4_offboard box_hybrid_landing.launch.py
+```
+
+Mặc định `auto_start:=true`, nên lander tự đi vào prelanding sau khi MAVROS connected để test flow trước khi tích hợp mission upload thật từ box. Khi đã có mission thật, chạy:
+
+```bash
+ros2 launch px4_offboard box_hybrid_landing.launch.py auto_start:=false
+```
+
+Kiểm tra FSM:
+
+```bash
+ros2 topic echo /box_hybrid_landing/state
+ros2 topic echo /sim_box/state
+```
+
+Yaw alignment hiện có guard:
+
+```bash
+ros2 launch px4_offboard box_hybrid_landing.launch.py enable_yaw_setpoint:=true
+```
+
+Chỉ bật sau khi đã xác nhận quyền điều khiển mode/setpoint không xung đột với PX4/MAVROS mission flow.
+
 ---
 
 ## Giám Sát và Kiểm Tra
