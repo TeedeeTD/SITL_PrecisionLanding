@@ -85,9 +85,9 @@
     </spherical_coordinates>
 
     <include>
-      <uri>model://fractal_aruco_marker</uri>
-      <name>landing_pad_fractal_aruco</name>
-      <pose>3.0 2.0 0 0 0 0</pose>
+      <uri>model://dib_box_landing_pad</uri>
+      <name>landing_box_fractal_aruco</name>
+      <pose>4.0 -3.5 0 0 0 0</pose>
     </include>
   </world>
 </sdf>

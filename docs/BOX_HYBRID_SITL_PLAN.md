@@ -59,7 +59,7 @@ Required behavior:
 
 ## Phase 2: Gazebo Box and Marker
 
-Create a static Gazebo model first:
+Status: implemented as a static SITL fixture.
 
 ```text
 dib_box_landing_pad
@@ -89,6 +89,26 @@ marker pose and yaw
 For yaw testing, set a non-zero box yaw and rotate the marker texture/model with
 the box. The acceptance check should compare UAV yaw against the box/marker yaw
 near touchdown.
+
+Current files:
+
+```text
+PX4 runtime:
+  Tools/simulation/gz/models/dib_box_landing_pad/model.sdf
+  Tools/simulation/gz/worlds/fractal_aruco_landing.sdf
+
+Repo mirror for rsync:
+  examples/gimbal_simulation/px4/Tools/simulation/gz/models/dib_box_landing_pad/model.sdf
+  examples/gimbal_simulation/px4/Tools/simulation/gz/worlds/fractal_aruco_landing.sdf
+```
+
+The model reuses:
+
+```text
+model://fractal_aruco_marker/marker.png
+```
+
+so `fractal_aruco_marker` must still be synced alongside the box model.
 
 ## Phase 3: Mock Box Hardware
 
