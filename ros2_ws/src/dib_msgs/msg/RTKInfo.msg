@@ -1,0 +1,2 @@
+uint8 gps_rtk_status_fix
+uint8 num_sat

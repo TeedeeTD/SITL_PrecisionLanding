@@ -1,0 +1,4 @@
+uint64 id
+dib_msgs/MissionItem[] mission
+---
+bool success

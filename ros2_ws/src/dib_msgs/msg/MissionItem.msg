@@ -1,0 +1,11 @@
+float64 latitude
+float64 longitude
+float64 altitude
+uint16 command
+float32 param1
+float32 param2
+uint8 cam_id
+uint8 cam_mode
+float32 cam_interval
+int16 cam_yaw
+int16 cam_pitch

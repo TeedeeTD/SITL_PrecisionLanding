@@ -50,6 +50,7 @@ ArucoFractalTracker::ArucoFractalTracker(const rclcpp::NodeOptions &options)
   this->declare_parameter<double>("camera_y_to_body_north_sign", 1.0);
   this->declare_parameter<double>("camera_offset_x", 0.1517);
   this->declare_parameter<double>("camera_offset_y", 0.0);
+  this->declare_parameter<std::string>("box_telemetry_topic", "/b1/telemetry");
 
   auto marker_configuration = this->get_parameter("marker_configuration").get_value<std::string>();
   marker_size_ = this->get_parameter("marker_size").get_value<double>();
@@ -64,6 +65,7 @@ ArucoFractalTracker::ArucoFractalTracker(const rclcpp::NodeOptions &options)
   camera_y_to_north_sign_ = this->get_parameter("camera_y_to_body_north_sign").as_double();
   camera_offset_x_ = this->get_parameter("camera_offset_x").as_double();
   camera_offset_y_ = this->get_parameter("camera_offset_y").as_double();
+  const auto box_telemetry_topic = this->get_parameter("box_telemetry_topic").as_string();
   
   detector_.setConfiguration(marker_configuration);
 
@@ -103,6 +105,13 @@ ArucoFractalTracker::ArucoFractalTracker(const rclcpp::NodeOptions &options)
     "/lander/state", 10,
     [this](const std_msgs::msg::String::SharedPtr msg) {
       last_lander_state_ = msg->data;
+    });
+
+  box_telemetry_sub_ = this->create_subscription<dib_msgs::msg::BoxTelemetry>(
+    box_telemetry_topic, 10,
+    [this](const dib_msgs::msg::BoxTelemetry::SharedPtr msg) {
+      last_box_yaw_ = static_cast<double>(msg->box_info.yaw);
+      last_box_yaw_valid_ = std::isfinite(last_box_yaw_);
     });
 
   tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(*this);
@@ -457,7 +466,7 @@ void ArucoFractalTracker::imageCallback(const sensor_msgs::msg::Image::SharedPtr
     const int line_h = 22;
     const int margin = 10;
     const int panel_w = 400;
-    const int panel_h = 7 * line_h + 12;
+    const int panel_h = 8 * line_h + 12;
     const int panel_top = std::max(0, cv_ptr->image.rows - panel_h - margin);
     const int panel_left = std::max(0, cv_ptr->image.cols - panel_w - margin);
 
@@ -515,6 +524,21 @@ void ArucoFractalTracker::imageCallback(const sensor_msgs::msg::Image::SharedPtr
 
       draw_text(cv::format("UAV ENU: E=%.2f, N=%.2f, U=%.2f", uav_x, uav_y, uav_z));
       draw_text(cv::format("UAV YAW: %.1f deg", yaw * 180.0 / 3.141592653589793));
+      if (last_box_yaw_valid_)
+      {
+        const double pi = 3.14159265358979323846;
+        const double delta_yaw = std::atan2(std::sin(last_box_yaw_ - yaw), std::cos(last_box_yaw_ - yaw));
+        draw_text(
+          cv::format(
+            "BOX YAW: %.1f deg | dYAW: %.1f deg",
+            last_box_yaw_ * 180.0 / pi,
+            delta_yaw * 180.0 / pi),
+          std::abs(delta_yaw) <= 5.0 * pi / 180.0 ? cv::Scalar(80, 255, 80) : cv::Scalar(0, 200, 255));
+      }
+      else
+      {
+        draw_text("BOX YAW: N/A | dYAW: N/A", cv::Scalar(0, 150, 255));
+      }
 
       if (marker_pose_valid)
       {
@@ -550,6 +574,7 @@ void ArucoFractalTracker::imageCallback(const sensor_msgs::msg::Image::SharedPtr
     {
       draw_text("UAV ENU: WAITING FOR MAVROS...", cv::Scalar(0, 150, 255)); // Orange/Yellow
       draw_text("UAV YAW: WAITING FOR MAVROS...", cv::Scalar(0, 150, 255));
+      draw_text("BOX YAW: N/A | dYAW: N/A", cv::Scalar(0, 150, 255));
       draw_text("REL ENU: WAITING FOR MAVROS...");
       if (marker_pose_valid)
       {

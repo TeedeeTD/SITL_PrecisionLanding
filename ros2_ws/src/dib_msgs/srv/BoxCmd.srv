@@ -1,0 +1,5 @@
+uint8 command
+uint64 reserve
+uint64 agent_id
+---
+bool success

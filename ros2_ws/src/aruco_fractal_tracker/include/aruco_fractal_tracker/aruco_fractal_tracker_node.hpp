@@ -24,6 +24,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <dib_msgs/msg/landing_target6_d.hpp>
+#include <dib_msgs/msg/box_telemetry.hpp>
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <tf2/LinearMath/Vector3.h>
 #include <tf2_ros/transform_broadcaster.h>
@@ -46,6 +47,7 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr uav_pose_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr lander_state_sub_;
+  rclcpp::Subscription<dib_msgs::msg::BoxTelemetry>::SharedPtr box_telemetry_sub_;
 
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr marker_pose_pub_;
@@ -85,6 +87,8 @@ private:
   rclcpp::Time last_latency_log_;
   std::string last_detected_ids_str_{"None"};
   std::string last_lander_state_{"UNKNOWN"};
+  double last_box_yaw_{0.0};
+  bool last_box_yaw_valid_{false};
   double current_fps_{0.0};
   rclcpp::Time last_fps_time_;
   size_t fps_frame_count_{0};

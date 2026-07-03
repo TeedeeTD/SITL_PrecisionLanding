@@ -252,8 +252,8 @@ Pipeline thử nghiệm cho flow `box_manager + precision landing` dùng cùng P
 
 ```text
 IDLE -> DRONE_MISSION -> PRELANDING_CHECK -> WAIT_BOX_READY
-     -> SEARCH -> HORIZONTAL_APPROACH -> YAW_ALIGN
-     -> DESCEND_OVER_TARGET -> LAND -> FLIGHT_IN_PROGRESS -> DONE
+     -> SEARCH -> HORIZONTAL_APPROACH -> DESCEND_OVER_TARGET
+     -> LAND -> FLIGHT_IN_PROGRESS -> DONE
 ```
 
 Trong prototype này, box thật được thay bằng `sim_box_manager`, publish `/sim_box/state`:
@@ -278,26 +278,35 @@ source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
 ros2 launch px4_offboard box_hybrid_landing.launch.py
 ```
 
-Mặc định `auto_start:=true`, nên lander tự đi vào prelanding sau khi MAVROS connected để test flow trước khi tích hợp mission upload thật từ box. Khi đã có mission thật, chạy:
+Hybrid lander không tự khởi động mission và không tự bay OFFBOARD tới box trong state `DRONE_MISSION`. Hãy setup/khởi chạy mission bằng QGroundControl hoặc luồng mission thật, rồi gửi trigger để node bắt đầu monitor mission/box:
 
 ```bash
-ros2 launch px4_offboard box_hybrid_landing.launch.py auto_start:=false
+ros2 topic pub --once /box_hybrid_landing/trigger std_msgs/msg/String "data: 'land'"
+```
+
+Trong SITL, node dùng waypoint progress hoặc khoảng cách local tới box fixture `(4.0, -3.5)` để nhận biết đã tới vùng hạ cánh. `manual_drive_alt` mặc định là `10.0m`, đóng vai trò độ cao approach/visual acquire ban đầu. Chỉ sau đó nó mới chuẩn bị gimbal, gửi `REQUEST_LANDING` tới box và chuyển sang visual guidance.
+
+Visual guidance mặc định dùng OFFBOARD setpoint sau khi đã tới box:
+
+```bash
+ros2 launch px4_offboard box_hybrid_landing.launch.py enable_offboard_visual_servo:=true
 ```
 
 Kiểm tra FSM:
 
 ```bash
 ros2 topic echo /box_hybrid_landing/state
-ros2 topic echo /sim_box/state
+ros2 topic echo /box_hybrid_landing/box_state
+ros2 topic echo /box_hybrid_landing/comms
 ```
 
 Yaw alignment hiện có guard:
 
 ```bash
-ros2 launch px4_offboard box_hybrid_landing.launch.py enable_yaw_setpoint:=true
+ros2 launch px4_offboard box_hybrid_landing.launch.py enable_yaw_setpoint:=true yaw_gate_deg:=5.0
 ```
 
-Chỉ bật sau khi đã xác nhận quyền điều khiển mode/setpoint không xung đột với PX4/MAVROS mission flow.
+Chỉ bật sau khi đã xác nhận quyền điều khiển mode/setpoint không xung đột với PX4/MAVROS mission flow. Khi bật, yaw được align tại `final_alt` trong lúc giữ XY/altitude, rồi mới trigger `AUTO.LAND`. Có thể siết `yaw_gate_deg:=3.0` khi muốn test chính xác hơn.
 
 ---
 

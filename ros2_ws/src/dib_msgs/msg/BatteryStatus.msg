@@ -1,0 +1,6 @@
+uint8 status_charge
+float32 voltage
+float32 voltage_charge
+float32 current_charge
+float32 temperature
+float32 time_charge

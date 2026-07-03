@@ -1,0 +1,7 @@
+std_msgs/Header header
+dib_msgs/BoxInfo box_info
+dib_msgs/BoxEnvironment box_environment
+dib_msgs/BoxState box_state
+dib_msgs/BoxPower box_power
+dib_msgs/BatteryStatus drone_battery_status
+dib_msgs/RTKInfo rtk_info

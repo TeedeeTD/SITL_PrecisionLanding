@@ -1,0 +1,6 @@
+uint8 command
+dib_msgs/MissionSchedule mission_schedule
+---
+bool accepted
+string message
+dib_msgs/MissionSchedule[] mission_schedules

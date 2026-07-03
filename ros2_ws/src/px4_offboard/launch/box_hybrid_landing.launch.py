@@ -2,11 +2,19 @@ import os
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
+    # --- Paths ---
+    box_manager_config_path = PathJoinSubstitution([
+        FindPackageShare('box_manager'),
+        'config',
+        'box_state_manager.yaml'
+    ])
+
     marker_configuration_arg = DeclareLaunchArgument(
         "marker_configuration",
         default_value=os.path.join(
@@ -25,22 +33,58 @@ def generate_launch_description():
         default_value="0.0",
         description="Camera physical Y offset relative to drone center in body FLU frame",
     )
-    auto_start_arg = DeclareLaunchArgument(
-        "auto_start",
-        default_value="true",
-        description="Start prelanding flow after MAVROS connects, useful before mission upload is integrated",
-    )
-    sim_box_ready_after_sec_arg = DeclareLaunchArgument(
-        "sim_box_ready_after_sec",
-        default_value="8.0",
-        description="Delay before the simulated box publishes WAITING_FOR_LANDING",
-    )
     enable_yaw_setpoint_arg = DeclareLaunchArgument(
         "enable_yaw_setpoint",
-        default_value="false",
-        description="Publish local yaw setpoints during YAW_ALIGN; keep false until mode ownership is tested",
+        default_value="true",
+        description="Publish local yaw setpoints during YAW_ALIGN",
+    )
+    yaw_gate_deg_arg = DeclareLaunchArgument(
+        "yaw_gate_deg",
+        default_value="5.0",
+        description="Yaw alignment tolerance in degrees before AUTO.LAND",
+    )
+    enable_offboard_visual_servo_arg = DeclareLaunchArgument(
+        "enable_offboard_visual_servo",
+        default_value="true",
+        description="Use OFFBOARD setpoints for visual approach after mission arrival",
+    )
+    trigger_mode_arg = DeclareLaunchArgument(
+        "trigger_mode",
+        default_value="manual",
+        description="Landing trigger source: manual, mission, or both",
+    )
+    state_heartbeat_sec_arg = DeclareLaunchArgument(
+        "state_heartbeat_sec",
+        default_value="1.0",
+        description="/box_hybrid_landing/state heartbeat period; 0 publishes only on state changes",
+    )
+    box_state_heartbeat_sec_arg = DeclareLaunchArgument(
+        "box_state_heartbeat_sec",
+        default_value="1.0",
+        description="/box_hybrid_landing/box_state heartbeat period; 0 publishes only on state changes",
+    )
+    manual_drive_to_box_arg = DeclareLaunchArgument(
+        "manual_drive_to_box",
+        default_value="true",
+        description="In manual trigger mode, command OFFBOARD setpoints to the SITL box fixture",
+    )
+    manual_drive_alt_arg = DeclareLaunchArgument(
+        "manual_drive_alt",
+        default_value="10.0",
+        description="Altitude used by manual SITL drive-to-box setpoint",
+    )
+    box_id_arg = DeclareLaunchArgument(
+        "box_id",
+        default_value="1",
+        description="Box ID for namespaced telemetry and commands",
+    )
+    drone_id_arg = DeclareLaunchArgument(
+        "drone_id",
+        default_value="1",
+        description="Drone ID for telemetry mapping",
     )
 
+    # 1. Gazebo Bridges
     image_bridge_node = Node(
         package="ros_gz_image",
         executable="image_bridge",
@@ -52,14 +96,14 @@ def generate_launch_description():
             )
         ],
         parameters=[{"use_sim_time": True}],
-        output="screen",
+        output="log",
     )
 
     clock_bridge_node = Node(
         package="ros_gz_bridge",
         executable="parameter_bridge",
         arguments=["/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock"],
-        output="screen",
+        output="log",
     )
 
     camera_info_bridge_node = Node(
@@ -75,9 +119,10 @@ def generate_launch_description():
             )
         ],
         parameters=[{"use_sim_time": True}],
-        output="screen",
+        output="log",
     )
 
+    # 2. ArUco Fractal Tracker Node
     tracker_node = Node(
         package="aruco_fractal_tracker",
         executable="aruco_fractal_tracker",
@@ -106,33 +151,68 @@ def generate_launch_description():
             ("poses_output_topic", "/aruco_fractal_tracker/poses"),
             ("target_output_topic", "/landing/target_camera"),
         ],
-        output="screen",
+        output="log",
     )
 
-    sim_box_node = Node(
+    # 3. Box Infrastructure Nodes
+    mock_box_hardware_node = Node(
         package="px4_offboard",
-        executable="sim_box_manager",
+        executable="mock_box_hardware",
+        name="mock_box_hardware",
+        parameters=[{"box_id": LaunchConfiguration("box_id")}],
+        output="log",
+    )
+
+    mavros_to_dib_telemetry_node = Node(
+        package="px4_offboard",
+        executable="mavros_to_dib_telemetry",
+        name="mavros_to_dib_telemetry",
+        parameters=[{"drone_id": LaunchConfiguration("drone_id")}],
+        output="log",
+    )
+
+    box_state_manager_node = Node(
+        package="box_manager",
+        executable="box_state_manager_node",
+        name="box_state_manager",
+        parameters=[
+            box_manager_config_path,
+            {"box_id": LaunchConfiguration("box_id")}
+        ],
+        output="log",
+    )
+
+    box_hybrid_status_monitor_node = Node(
+        package="px4_offboard",
+        executable="box_hybrid_status_monitor",
+        name="box_hybrid_status_monitor",
         parameters=[
             {
-                "state_topic": "/sim_box/state",
-                "ready_after_sec": LaunchConfiguration("sim_box_ready_after_sec"),
+                "box_id": LaunchConfiguration("box_id"),
+                "box_state_heartbeat_sec": LaunchConfiguration("box_state_heartbeat_sec"),
                 "use_sim_time": True,
             }
         ],
         output="screen",
     )
 
+    # 4. Hybrid Lander Node
     hybrid_lander_node = Node(
         package="px4_offboard",
         executable="box_hybrid_precision_lander",
         parameters=[
             {
                 "target_topic": "/landing/target_camera",
-                "sim_box_state_topic": "/sim_box/state",
-                "box_ready_state": "WAITING_FOR_LANDING",
-                "auto_start": LaunchConfiguration("auto_start"),
+                "box_id": LaunchConfiguration("box_id"),
+                "drone_id": LaunchConfiguration("drone_id"),
                 "marker_size": 0.50,
                 "enable_yaw_setpoint": LaunchConfiguration("enable_yaw_setpoint"),
+                "yaw_gate_deg": LaunchConfiguration("yaw_gate_deg"),
+                "enable_offboard_visual_servo": LaunchConfiguration("enable_offboard_visual_servo"),
+                "trigger_mode": LaunchConfiguration("trigger_mode"),
+                "state_heartbeat_sec": LaunchConfiguration("state_heartbeat_sec"),
+                "manual_drive_to_box": LaunchConfiguration("manual_drive_to_box"),
+                "manual_drive_alt": LaunchConfiguration("manual_drive_alt"),
                 "use_sim_time": True,
             }
         ],
@@ -144,14 +224,24 @@ def generate_launch_description():
             marker_configuration_arg,
             camera_offset_x_arg,
             camera_offset_y_arg,
-            auto_start_arg,
-            sim_box_ready_after_sec_arg,
             enable_yaw_setpoint_arg,
+            yaw_gate_deg_arg,
+            enable_offboard_visual_servo_arg,
+            trigger_mode_arg,
+            state_heartbeat_sec_arg,
+            box_state_heartbeat_sec_arg,
+            manual_drive_to_box_arg,
+            manual_drive_alt_arg,
+            box_id_arg,
+            drone_id_arg,
             image_bridge_node,
             clock_bridge_node,
             camera_info_bridge_node,
             tracker_node,
-            sim_box_node,
+            mock_box_hardware_node,
+            mavros_to_dib_telemetry_node,
+            box_state_manager_node,
+            box_hybrid_status_monitor_node,
             hybrid_lander_node,
         ]
     )
