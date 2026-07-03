@@ -1,0 +1,3 @@
+numpy
+pymavlink
+opencv-python

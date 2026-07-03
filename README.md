@@ -1,10 +1,6 @@
 # PX4 Gimbal Precision Landing
 
-Project này chứa ba pipeline hạ cánh chính xác cho drone `x500_gimbal` trong mô phỏng Gazebo SITL, sử dụng **MAVROS** làm giao thức kết nối điều khiển chính:
-
-1. **Fractal ArUco landing**: Sử dụng bộ tracker C++ `aruco_fractal_tracker` với cấu trúc marker lồng nhau (nested fractal marker) tùy chỉnh có kích thước ngoài cùng 50 cm.
-2. **Standard ArUco landing**: Bộ định vị C++ hiệu năng cao (`aruco_tracker` trong package `aruco_fractal_tracker` & Python `aruco_precision_lander`) cho phép phát hiện các marker chuẩn.
-3. **AprilTag landing**: Bộ định vị C++ hiệu năng cao (`apriltag_tracker` trong package `aruco_fractal_tracker` & Python `apriltag_precision_lander`) hỗ trợ phát hiện AprilTag.
+Project này chứa pipeline hạ cánh chính xác cho drone `x500_gimbal` trong mô phỏng Gazebo SITL sử dụng **Fractal ArUco landing** (bộ tracker C++ `aruco_fractal_tracker` với cấu trúc marker lồng nhau nested fractal marker tùy chỉnh có kích thước ngoài cùng 50 cm), sử dụng **MAVROS** làm giao thức kết nối điều khiển chính.
 
 ---
 
@@ -38,8 +34,6 @@ Project này chứa ba pipeline hạ cánh chính xác cho drone `x500_gimbal` t
 
    ```bash
    # Kiểm tra worlds
-   ls ~/PX4/Tools/simulation/gz/worlds/apriltag_landing.sdf
-   ls ~/PX4/Tools/simulation/gz/worlds/aruco_landing.sdf
    ls ~/PX4/Tools/simulation/gz/worlds/fractal_aruco_landing.sdf
 
    # Kiểm tra mô hình và kết cấu ảnh của Fractal
@@ -64,13 +58,46 @@ Cần có:
 - `ros_gz_image`, `cv_bridge`, `rqt_image_view`.
 - ArUco C++ library có `libaruco.so.3.1`.
 
+### Cách kiểm tra môi trường & cài đặt tự động (Khuyên dùng)
+
+Để đảm bảo mọi thư viện (bao gồm `libaruco`, các package ROS 2, Python dependencies và Gazebo bridge thích hợp) đều được cài đặt chính xác, bạn chỉ cần chạy script kiểm tra tự động đi kèm trong thư mục dự án:
+
+```bash
+chmod +x verify_build_env.sh
+./verify_build_env.sh
+```
+
+Script này sẽ tự động:
+1. Phát hiện phiên bản Gazebo của bạn để cài đặt đúng gói bridge.
+2. Kiểm tra và tự động cài các package ROS 2 còn thiếu.
+3. Giải nén và tự động biên dịch thư viện C++ `libaruco 3.1.12` từ file đính kèm nếu hệ thống chưa có.
+4. Cài đặt các package Python thông qua `requirements.txt`.
+
+Hoặc nếu bạn muốn tự cài đặt thủ công, hãy làm theo các bước dưới đây:
+
 ### Cài package ROS 2 thường dùng
 
+Tùy thuộc vào phiên bản Gazebo được cài đặt trên máy của bạn (ví dụ: Gazebo Garden hoặc Gazebo Harmonic), chọn cài đặt các gói bridge tương thích:
+
+**Với Gazebo Garden (Mặc định của PX4 v1.14+):**
 ```bash
 sudo apt update
 sudo apt install -y \
   ros-humble-ros-gz-image \
-  ros-humble-ros-gz-bridge \
+  ros-humble-ros-gz-bridge
+```
+
+**Với Gazebo Harmonic (Dành cho các hệ thống máy mới):**
+```bash
+sudo apt update
+sudo apt install -y \
+  ros-humble-ros-gzharmonic-image \
+  ros-humble-ros-gzharmonic-bridge
+```
+
+**Cài đặt các gói ROS 2 bổ sung và MAVROS:**
+```bash
+sudo apt install -y \
   ros-humble-mavros \
   ros-humble-mavros-extras \
   ros-humble-cv-bridge \
@@ -78,9 +105,17 @@ sudo apt install -y \
   ros-humble-rqt-image-view \
   python3-colcon-common-extensions \
   python3-opencv
-
-pip3 install pymavlink
 ```
+
+**Cài đặt thư viện Python thông qua `requirements.txt`:**
+```bash
+pip3 install -r requirements.txt
+```
+
+> [!NOTE]
+> **Khắc phục lỗi không tương thích OpenCV 4 (OpenCV 4.7+):**
+> Trong file `aruco_standard_tracker_node.cpp`, hàm `cv::aruco::drawAxis` (đã bị xóa trên OpenCV mới) được cập nhật bằng `cv::drawFrameAxes` để đảm bảo code tự động biên dịch thành công trên mọi môi trường máy mới.
+
 
 ---
 
@@ -125,49 +160,7 @@ pkill -9 -f "gz sim|px4|mavros|tracker|lander|rqt_image_view|ros_gz"
 
 ---
 
-## 1. AprilTag Landing (MAVROS-based)
-
-World AprilTag sử dụng một AprilTag đơn lẻ (mặc định kích thước `0.50m`). Node sử dụng bộ lọc ngưỡng kép (Double-pass Otsu) chống nhiễu và cơ chế **Low-altitude Land Commitment** (tự động hạ cánh dưới 1.5m khi tag đi ra ngoài camera).
-
-* **Terminal 1: Khởi động PX4 SITL**
-
-  ```bash
-  cd ~/PX4
-  PX4_GZ_WORLD=apriltag_landing PX4_GZ_NO_FOLLOW=1 make px4_sitl gz_x500_gimbal
-  ```
-
-* **Terminal 2: Khởi động toàn bộ cụm ROS 2 Nodes (Unified Launch File)**
-
-  ```bash
-  source /opt/ros/humble/setup.bash
-  source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
-  ros2 launch px4_offboard apriltag_landing.launch.py target_tag_id:=0 marker_size:=0.50
-  ```
-
----
-
-## 2. Standard ArUco Landing (MAVROS-based)
-
-World ArUco sử dụng một marker ArUco đơn lẻ chuẩn (mặc định kích thước `0.50m`). Node tích hợp bộ lọc Otsu threshold kép và cơ chế **Low-altitude Land Commitment**.
-
-* **Terminal 1: Khởi động PX4 SITL**
-
-  ```bash
-  cd ~/PX4
-  PX4_GZ_WORLD=aruco_landing PX4_GZ_NO_FOLLOW=1 make px4_sitl gz_x500_gimbal
-  ```
-
-* **Terminal 2: Khởi động toàn bộ cụm ROS 2 Nodes (Unified Launch File)**
-
-  ```bash
-  source /opt/ros/humble/setup.bash
-  source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
-  ros2 launch px4_offboard aruco_landing.launch.py dictionary:=DICT_4X4_50 marker_size:=0.50
-  ```
-
----
-
-## 3. Fractal ArUco Landing (MAVROS-based)
+## 1. Fractal ArUco Landing (MAVROS-based)
 
 Pipeline định vị hạ cánh chính xác sử dụng MAVROS. Tracker C++ xuất contract `/landing/target_camera` (`dib_msgs/LandingTarget6D`) trong camera optical frame với state `LOST/SEARCHING/TRACKING`; topic pose `/aruco_fractal_tracker/poses` được giữ cho debug. Lander lọc target, bù camera offset, xoay theo yaw thân drone và điều khiển trong local ENU.
 
@@ -223,6 +216,15 @@ source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
 ros2 launch px4_offboard fractal_aruco_landing.launch.py
 ```
 
+* **Terminal 4: Xem luồng camera có HUD overlay trực quan**
+
+```bash
+source /opt/ros/humble/setup.bash
+ros2 run rqt_image_view rqt_image_view
+```
+*Chọn topic `/landing/annotated_image` từ thanh công cụ để theo dõi trực quan trạng thái FSM, tọa độ bám bắt, và các thông tin chẩn đoán trực tiếp.*
+
+
 `fractal_aruco_landing.launch.py` không khởi động MAVROS. Khi cần sửa/restart tracker hoặc lander, chỉ restart Terminal 3. Không restart Terminal 2, như vậy PX4 vẫn nhận heartbeat mission computer từ MAVROS liên tục.
 
 Nếu restart MAVROS trong lúc đang bay hoặc đang giữ OFFBOARD, QGroundControl/PX4 có thể báo:
@@ -246,7 +248,7 @@ search_y = North
 pos_enu / target_enu / raw_enu / sp_enu đều là ENU
 ```
 
-### 3.1 Box Hybrid Landing (SITL prototype)
+### 1.1 Box Hybrid Landing (SITL prototype)
 
 Pipeline thử nghiệm cho flow `box_manager + precision landing` dùng cùng PX4 SITL, MAVROS và fractal tracker, nhưng thay lander cũ bằng FSM hybrid:
 
@@ -409,7 +411,6 @@ Không dùng force-disarm làm tiêu chuẩn thành công khi chạy thật.
 
 ## Ghi Chú
 
-- AprilTag, Standard ArUco và Fractal ArUco hiện tại đều sử dụng chung hệ thống MAVROS-based.
 - Thống nhất kích thước tất cả các marker chính về `0.50m` (`marker_size:=0.50`).
 - Nếu sau này đổi physical marker size trong `model.sdf`, phải đổi `marker_size` tương ứng trong file launch.
 - `command 520 unsupported` là capability request MAVLink cũ từ client và không phải lệnh điều khiển landing.

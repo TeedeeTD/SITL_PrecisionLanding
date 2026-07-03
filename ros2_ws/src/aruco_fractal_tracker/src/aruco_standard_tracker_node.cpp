@@ -316,7 +316,7 @@ void ArucoStandardTracker::imageCallback(const sensor_msgs::msg::Image::SharedPt
       cv::Vec3d tvec = tvecs[0];
 
       // Draw axis
-      cv::aruco::drawAxis(cv_ptr->image, camera_matrix_, dist_coeffs_, rvec, tvec, marker_size_ * 0.5f);
+      cv::drawFrameAxes(cv_ptr->image, camera_matrix_, dist_coeffs_, rvec, tvec, marker_size_ * 0.5f);
 
       cv::Mat rmatrix;
       cv::Rodrigues(rvec, rmatrix);
