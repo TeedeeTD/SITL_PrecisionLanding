@@ -74,7 +74,7 @@ Script này sẽ tự động:
 3. Giải nén và tự động biên dịch thư viện C++ `libaruco 3.1.12` từ file đính kèm nếu hệ thống chưa có.
 4. Cài đặt các package Python thông qua `requirements.txt`.
 
-Hoặc nếu bạn muốn tự cài đặt thủ công, hãy làm theo các bước dưới đây:
+## Hoặc nếu bạn muốn tự cài đặt thủ công, hãy làm theo các bước dưới đây:
 
 ### Cài package ROS 2 thường dùng
 
