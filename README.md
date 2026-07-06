@@ -209,7 +209,15 @@ Kỳ vọng:
 connected: true
 ```
 
-* **Terminal 3: Xem luồng camera có HUD overlay trực quan**
+* **Terminal 3: Khởi động bridge camera, tracker và lander**
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/PX4/examples/SITL_PrecisionLanding/ros2_ws/install/setup.bash
+ros2 launch px4_offboard fractal_aruco_landing.launch.py
+```
+
+* **Terminal 4: Xem luồng camera có HUD overlay trực quan**
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -217,13 +225,7 @@ ros2 run rqt_image_view rqt_image_view
 ```
 *Chọn topic `/landing/annotated_image` từ thanh công cụ để theo dõi trực quan trạng thái FSM, tọa độ bám bắt, và các thông tin chẩn đoán trực tiếp.*
 
-* **Terminal 4: Khởi động bridge camera, tracker và lander**
 
-```bash
-source /opt/ros/humble/setup.bash
-source ~/PX4/examples/SITL_PrecisionLanding/ros2_ws/install/setup.bash
-ros2 launch px4_offboard fractal_aruco_landing.launch.py
-```
 
 `fractal_aruco_landing.launch.py` không khởi động MAVROS. Khi cần sửa/restart tracker hoặc lander, chỉ restart Terminal 4. Không restart Terminal 2, như vậy PX4 vẫn nhận heartbeat mission computer từ MAVROS liên tục.
 
