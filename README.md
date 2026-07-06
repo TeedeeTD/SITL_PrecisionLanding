@@ -10,14 +10,14 @@ Project này chứa pipeline hạ cánh chính xác cho drone `x500_gimbal` tron
 
    ```bash
    cd ~/PX4/examples
-   git clone git@github.com:do010303/gimbal_simulation.git
+   git clone git@github.com:TeedeeTD/SITL_PrecisionLanding.git
    ```
 
    Cấu trúc thư mục mong đợi:
    ```text
    ~/PX4
    └── examples
-       └── gimbal_simulation
+       └── SITL_PrecisionLanding
    ```
 
 2. **Đồng Bộ Hóa Mô Phỏng (Sync Worlds, Models & Textures)**:
@@ -26,7 +26,7 @@ Project này chứa pipeline hạ cánh chính xác cho drone `x500_gimbal` tron
    ```bash
    cd ~/PX4
    rsync -a \
-     examples/gimbal_simulation/px4/Tools/simulation/gz/ \
+     examples/SITL_PrecisionLanding/px4/Tools/simulation/gz/ \
      Tools/simulation/gz/
    ```
 
@@ -63,6 +63,7 @@ Cần có:
 Để đảm bảo mọi thư viện (bao gồm `libaruco`, các package ROS 2, Python dependencies và Gazebo bridge thích hợp) đều được cài đặt chính xác, bạn chỉ cần chạy script kiểm tra tự động đi kèm trong thư mục dự án:
 
 ```bash
+cd ~/PX4/examples/SITL_PrecisionLanding
 chmod +x verify_build_env.sh
 ./verify_build_env.sh
 ```
@@ -124,7 +125,7 @@ pip3 install -r requirements.txt
 `px4_msgs` cần nằm trong workspace hoặc được source từ workspace khác:
 
 ```bash
-cd ~/PX4/examples/gimbal_simulation/ros2_ws
+cd ~/PX4/examples/SITL_PrecisionLanding/ros2_ws
 source /opt/ros/humble/setup.bash
 
 # Nếu chưa có px4_msgs:
@@ -140,10 +141,10 @@ Nếu tracker thiếu `libaruco.so.3.1`, kiểm tra:
 ldd install/aruco_fractal_tracker/lib/aruco_fractal_tracker/aruco_fractal_tracker | grep aruco
 ```
 
-Nếu chưa resolve tới `/home/ducanh/.local/lib/libaruco.so.3.1`, rebuild tracker:
+Nếu chưa resolve tới `/home/teedee/.local/lib/libaruco.so.3.1`, rebuild tracker:
 
 ```bash
-cd ~/PX4/examples/gimbal_simulation/ros2_ws
+cd ~/PX4/examples/SITL_PrecisionLanding/ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 colcon build --symlink-install --packages-select aruco_fractal_tracker --cmake-clean-cache
@@ -198,7 +199,7 @@ Kiểm tra MAVROS đã nối PX4:
 
 ```bash
 source /opt/ros/humble/setup.bash
-source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
+source ~/PX4/examples/SITL_PrecisionLanding/ros2_ws/install/setup.bash
 ros2 topic echo --once /mavros/state
 ```
 
@@ -212,7 +213,7 @@ connected: true
 
 ```bash
 source /opt/ros/humble/setup.bash
-source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
+source ~/PX4/examples/SITL_PrecisionLanding/ros2_ws/install/setup.bash
 ros2 launch px4_offboard fractal_aruco_landing.launch.py
 ```
 
@@ -372,7 +373,7 @@ Tracker target và pose debug:
 
 ```bash
 source /opt/ros/humble/setup.bash
-source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
+source ~/PX4/examples/SITL_PrecisionLanding/ros2_ws/install/setup.bash
 ros2 topic hz /landing/target_camera
 ros2 topic echo --once /landing/target_camera
 ros2 topic hz /aruco_fractal_tracker/poses
@@ -383,7 +384,7 @@ MAVROS topics:
 
 ```bash
 source /opt/ros/humble/setup.bash
-source ~/PX4/examples/gimbal_simulation/ros2_ws/install/setup.bash
+source ~/PX4/examples/SITL_PrecisionLanding/ros2_ws/install/setup.bash
 ros2 topic hz /mavros/setpoint_position/local
 ros2 topic echo --once /mavros/state
 ros2 topic echo --once /mavros/extended_state
