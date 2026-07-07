@@ -24,6 +24,7 @@ setup(
             'drone_controller = px4_offboard.drone_controller:main',
             'camera_viewer    = px4_offboard.camera_viewer:main',
             'fractal_aruco_precision_lander = px4_offboard.fractal_aruco_precision_lander:main',
+            'landing_target_bridge = px4_offboard.landing_target_bridge:main',
             'apriltag_precision_lander = px4_offboard.apriltag_precision_lander:main',
             'aruco_precision_lander = px4_offboard.aruco_precision_lander:main',
             'box_hybrid_precision_lander = px4_offboard.box_hybrid_precision_lander:main',

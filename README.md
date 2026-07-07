@@ -181,6 +181,12 @@ Tầng trong cùng (Inner - Level 3): 3.125 cm (0.03125 m)
 
 `dib_box_landing_pad/model.sdf`, `marker_size` trong launch và marker vật lý phải luôn dùng cùng kích thước. Detector sử dụng `custom_fractal.yml`; file này được sync sang PX4 cùng model.
 
+* **Cập nhật file:**
+  Ghi đè trực tiếp giá trị <horizontal_fov>1.4137</horizontal_fov> vào file
+  ```bash
+  /home/teedee/PX4/Tools/simulation/gz/models/gimbal/model.sdf trên đĩa.
+  ```
+
 * **Terminal 1: Khởi động PX4 SITL**
 
   ```bash
@@ -418,3 +424,63 @@ Không dùng force-disarm làm tiêu chuẩn thành công khi chạy thật.
 - `command 520 unsupported` là capability request MAVLink cũ từ client và không phải lệnh điều khiển landing.
 - Trước một lần chạy sạch từ đầu, dừng các tiến trình PX4/MAVROS cũ để tránh giữ UDP endpoint hoặc quyền điều khiển gimbal từ phiên trước.
 - Khi đang debug giữa chuyến bay hoặc đang giữ OFFBOARD, không restart MAVROS. Hãy giữ Terminal 2 chạy MAVROS riêng và chỉ restart Terminal 3 với `ros2 launch px4_offboard fractal_aruco_landing.launch.py`.
+
+---
+
+## 2. Hướng Dẫn Chạy Thực Tế & Mô Phỏng Với PX4 Precland
+
+### 2.1. Chạy detect bằng cam thật:
+```bash
+source ~/PX4/examples/SITL_PrecisionLanding/ros2_ws/install/setup.bash 
+ros2 launch siyi_camera_bridge real_fractal_detect.launch.py \
+  enable_mavros:=false \
+  rtsp_url:=rtsp://192.168.168.16:8554/main.264 \
+  marker_configuration:=/home/teedee/PX4/examples/SITL_PrecisionLanding/px4/Tools/simulation/gz/models/fractal_aruco_marker/custom_fractal.yml \
+  marker_size:=0.162 \
+  flip_180:=false
+```
+
+### 2.2. Chạy Precland điều khiển bằng PX4 (Sử dụng [qgc_sim_precland.launch.py](file:///home/teedee/PX4/examples/SITL_PrecisionLanding/ros2_ws/src/px4_offboard/launch/qgc_sim_precland.launch.py) và [landing_target_bridge.py](file:///home/teedee/PX4/examples/SITL_PrecisionLanding/ros2_ws/src/px4_offboard/px4_offboard/landing_target_bridge.py)):
+
+#### Dọn Tiến Trình Cũ:
+```bash
+pkill -9 -f "gz sim|px4|mavros|tracker|lander|rqt_image_view|ros_gz"
+```
+
+#### Terminal 1: Khởi động PX4 SITL:
+```bash
+cd ~/PX4
+PX4_GZ_WORLD=fractal_aruco_landing PX4_GZ_NO_FOLLOW=1 make px4_sitl gz_x500_gimbal
+```
+
+#### Terminal 2: Chạy MAVROS một lần và giữ nguyên:
+```bash
+source /opt/ros/humble/setup.bash
+ros2 launch mavros px4.launch fcu_url:=udp://:14540@127.0.0.1:14580
+```
+Kiểm tra MAVROS đã nối PX4:
+```bash
+source /opt/ros/humble/setup.bash
+source ~/SITL_PrecisionLanding/ros2_ws/install/setup.bash
+ros2 topic echo --once /mavros/state
+```
+Kỳ vọng:
+```text
+connected: true
+```
+
+#### Terminal 3: Khởi động bridge camera, tracker và lander:
+```bash
+source /opt/ros/humble/setup.bash
+source ~/SITL_PrecisionLanding/ros2_ws/install/setup.bash
+ros2 launch px4_offboard qgc_sim_precland.launch.py
+```
+
+#### Terminal 4: Xem luồng camera có HUD overlay trực quan:
+```bash
+source /opt/ros/humble/setup.bash
+ros2 run rqt_image_view rqt_image_view
+```
+*Chọn topic `/landing/annotated_image` từ thanh công cụ để theo dõi trực quan trạng thái FSM, tọa độ bám bắt, và các thông tin chẩn đoán trực tiếp.*
+
+`qgc_sim_precland.launch.py` không khởi động MAVROS. Khi cần sửa/restart tracker hoặc lander, chỉ restart Terminal 3. Không restart Terminal 2, như vậy PX4 vẫn nhận heartbeat mission computer từ MAVROS liên tục.

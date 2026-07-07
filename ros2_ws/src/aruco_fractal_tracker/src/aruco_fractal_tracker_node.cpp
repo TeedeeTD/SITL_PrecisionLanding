@@ -2,16 +2,16 @@
  * This file is part of the aruco_fractal_tracker distribution (https://github.com/dimianx/aruco_fractal_tracker).
  * Copyright (c) 2024-2025 Dmitry Anikin <dmitry.anikin@proton.me>.
  *
- * This program is free software: you can redistribute it and/or modify  
- * it under the terms of the GNU General Public License as published by  
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, version 3.
  *
- * This program is distributed in the hope that it will be useful, but 
- * WITHOUT ANY WARRANTY; without even the implied warranty of 
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU 
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License 
+ * You should have received a copy of the GNU General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
@@ -66,12 +66,12 @@ ArucoFractalTracker::ArucoFractalTracker(const rclcpp::NodeOptions &options)
   camera_offset_x_ = this->get_parameter("camera_offset_x").as_double();
   camera_offset_y_ = this->get_parameter("camera_offset_y").as_double();
   const auto box_telemetry_topic = this->get_parameter("box_telemetry_topic").as_string();
-  
+
   detector_.setConfiguration(marker_configuration);
 
   // Set default/fallback camera parameters (width: 1280, height: 720, HFOV: 1.4137 rad / 81 degrees)
   // fx = fy = (1280 / 2) / tan(1.4137 / 2) = 640 / tan(40.5 deg) = 749.338
-  cv::Mat camera_matrix = (cv::Mat_<double>(3, 3) << 
+  cv::Mat camera_matrix = (cv::Mat_<double>(3, 3) <<
     749.338, 0.0, 640.0,
     0.0, 749.338, 360.0,
     0.0, 0.0, 1.0);
@@ -144,45 +144,45 @@ void ArucoFractalTracker::cameraInfoCallback(const sensor_msgs::msg::CameraInfo:
 {
   bool update_needed = false;
 
-  if (!camera_info_initialized_) 
+  if (!camera_info_initialized_)
   {
     update_needed = true;
-  } 
-  else 
+  }
+  else
   {
-    if (msg->width != last_camera_info_.width || msg->height != last_camera_info_.height) 
+    if (msg->width != last_camera_info_.width || msg->height != last_camera_info_.height)
     {
       update_needed = true;
-    } 
-    else 
+    }
+    else
     {
-      for (int i = 0; i < 9; ++i) 
+      for (int i = 0; i < 9; ++i)
       {
-        if (std::abs(msg->k[i] - last_camera_info_.k[i]) > 1e-6) 
+        if (std::abs(msg->k[i] - last_camera_info_.k[i]) > 1e-6)
         {
           update_needed = true;
           break;
         }
       }
-      if (!update_needed && msg->d.size() == last_camera_info_.d.size()) 
+      if (!update_needed && msg->d.size() == last_camera_info_.d.size())
       {
-        for (size_t i = 0; i < msg->d.size(); ++i) 
+        for (size_t i = 0; i < msg->d.size(); ++i)
         {
-          if (std::abs(msg->d[i] - last_camera_info_.d[i]) > 1e-6) 
+          if (std::abs(msg->d[i] - last_camera_info_.d[i]) > 1e-6)
           {
             update_needed = true;
             break;
           }
         }
-      } 
-      else if (!update_needed) 
+      }
+      else if (!update_needed)
       {
         update_needed = true;
       }
     }
   }
 
-  if (!update_needed) 
+  if (!update_needed)
   {
     return;
   }
@@ -262,22 +262,22 @@ void ArucoFractalTracker::imageCallback(const sensor_msgs::msg::Image::SharedPtr
     }
   }
 
-  try 
+  try
   {
-    cv_ptr = cv_bridge::toCvCopy(msg);
-  } 
-  catch (cv_bridge::Exception& e) 
+    cv_ptr = cv_bridge::toCvCopy(msg, "bgr8");
+  }
+  catch (cv_bridge::Exception& e)
   {
     RCLCPP_ERROR_STREAM(this->get_logger(), "cv_bridge exception: " << e.what());
     return;
   }
 
-  cv::cvtColor(cv_ptr->image, gray, CV_BGR2GRAY);
+  cv::cvtColor(cv_ptr->image, gray, cv::COLOR_BGR2GRAY);
 
   if (detector_.detect(gray))
   {
     detector_.drawMarkers(cv_ptr->image);
-    
+
     std::vector<aruco::Marker> markers = detector_.getMarkers();
     std::string ids_str = "";
     for (size_t i = 0; i < markers.size(); ++i)
@@ -295,13 +295,13 @@ void ArucoFractalTracker::imageCallback(const sensor_msgs::msg::Image::SharedPtr
       cv::Mat tvec = detector_.getTvec();
       cv::Mat rvec = detector_.getRvec();
       detector_.draw3d(cv_ptr->image);
-      
+
       cv::Mat rmatrix;
       cv::Rodrigues(rvec, rmatrix);
       tf2::Matrix3x3 tf2_rot(rmatrix.at<double>(0, 0), rmatrix.at<double>(0, 1), rmatrix.at<double>(0, 2),
                              rmatrix.at<double>(1, 0), rmatrix.at<double>(1, 1), rmatrix.at<double>(1, 2),
                              rmatrix.at<double>(2, 0), rmatrix.at<double>(2, 1), rmatrix.at<double>(2, 2));
-        
+
       tf2::Vector3 tf2_translation(tvec.at<double>(0, 0), tvec.at<double>(1, 0), tvec.at<double>(2, 0));
       tf2::Transform tf2_transform(tf2_rot, tf2_translation);
       tf2::Quaternion quat;
@@ -342,7 +342,7 @@ void ArucoFractalTracker::imageCallback(const sensor_msgs::msg::Image::SharedPtr
           reject_reason.c_str());
         last_pose_log_ = now;
       }
-      
+
       int base_line = 0;
       int font_face = cv::FONT_HERSHEY_PLAIN;
       double font_scale = 1;
@@ -609,11 +609,11 @@ void ArucoFractalTracker::imageCallback(const sensor_msgs::msg::Image::SharedPtr
     last_latency_log_ = now;
   }
 
-  try 
+  try
   {
     image_pub_->publish(*cv_ptr->toImageMsg());
-  } 
-  catch (cv_bridge::Exception& e) 
+  }
+  catch (cv_bridge::Exception& e)
   {
     RCLCPP_ERROR_STREAM(this->get_logger(), "cv_bridge exception: " << e.what());
     return;

@@ -40,6 +40,7 @@ class RtspPublisher(Node):
         self.declare_parameter('camera_fy', 749.338)
         self.declare_parameter('camera_cx', 640.0)
         self.declare_parameter('camera_cy', 360.0)
+        self.declare_parameter('camera_d', [0.0, 0.0, 0.0, 0.0, 0.0])
 
         self.rtsp_url = self.get_parameter('rtsp_url').value
         self.frame_id = self.get_parameter('frame_id').value
@@ -51,6 +52,7 @@ class RtspPublisher(Node):
         self.camera_fy = self.get_parameter('camera_fy').value
         self.camera_cx = self.get_parameter('camera_cx').value
         self.camera_cy = self.get_parameter('camera_cy').value
+        self.camera_d = self.get_parameter('camera_d').value
 
         # ── Publishers ──────────────────────────────────────────────
         self.image_pub = self.create_publisher(Image, '/siyi/image_raw', 10)
@@ -113,7 +115,7 @@ class RtspPublisher(Node):
         msg.width = self.image_width
         msg.height = self.image_height
         msg.distortion_model = 'plumb_bob'
-        msg.d = [0.0, 0.0, 0.0, 0.0, 0.0]
+        msg.d = list(self.camera_d)
 
         # Intrinsic camera matrix (K)
         fx = self.camera_fx

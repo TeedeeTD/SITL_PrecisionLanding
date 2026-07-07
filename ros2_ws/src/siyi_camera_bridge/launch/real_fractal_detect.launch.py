@@ -64,7 +64,7 @@ def generate_launch_description():
         'marker_configuration',
         default_value=os.path.join(
             os.path.expanduser('~'),
-            'PX4/examples/gimbal_simulation/px4/Tools/simulation/gz/models/'
+            'PX4/examples/SITL_PrecisionLanding/px4/Tools/simulation/gz/models/'
             'fractal_aruco_marker/custom_fractal.yml'
         ),
         description='Absolute path to the fractal marker configuration YAML'
@@ -88,6 +88,30 @@ def generate_launch_description():
         description='MAVROS FCU URL (e.g. /dev/ttyACM0:57600 for USB Pixhawk)'
     )
 
+    camera_fx_arg = DeclareLaunchArgument(
+        'camera_fx',
+        default_value='735.788640',
+        description='Calibrated camera focal length fx'
+    )
+
+    camera_fy_arg = DeclareLaunchArgument(
+        'camera_fy',
+        default_value='733.752679',
+        description='Calibrated camera focal length fy'
+    )
+
+    camera_cx_arg = DeclareLaunchArgument(
+        'camera_cx',
+        default_value='657.226337',
+        description='Calibrated camera principal point cx'
+    )
+
+    camera_cy_arg = DeclareLaunchArgument(
+        'camera_cy',
+        default_value='350.211265',
+        description='Calibrated camera principal point cy'
+    )
+
     # ── 1. MAVROS (optional) ────────────────────────────────────────
 
     mavros_launch = OpaqueFunction(function=_maybe_start_mavros)
@@ -105,6 +129,11 @@ def generate_launch_description():
             'target_fps': 30.0,
             'image_width': 1280,
             'image_height': 720,
+            'camera_fx': LaunchConfiguration('camera_fx'),
+            'camera_fy': LaunchConfiguration('camera_fy'),
+            'camera_cx': LaunchConfiguration('camera_cx'),
+            'camera_cy': LaunchConfiguration('camera_cy'),
+            'camera_d': [-0.101107, 0.094045, 0.000213, 0.003899, 0.0],
         }],
         output='screen'
     )
@@ -151,6 +180,10 @@ def generate_launch_description():
         marker_size_arg,
         enable_mavros_arg,
         fcu_url_arg,
+        camera_fx_arg,
+        camera_fy_arg,
+        camera_cx_arg,
+        camera_cy_arg,
         mavros_launch,
         rtsp_node,
         tracker_node,
