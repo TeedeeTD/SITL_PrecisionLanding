@@ -679,6 +679,37 @@ void ArucoFractalTracker::publishTarget(
   double yaw = 0.0;
   rotation.getRPY(roll, pitch, yaw);
 
+  // Compute absolute ENU orientation of the tag, assuming stabilized gimbal points straight down
+  double uav_yaw = 0.0;
+  if (last_uav_pose_)
+  {
+    tf2::Quaternion q(
+      last_uav_pose_->pose.orientation.x,
+      last_uav_pose_->pose.orientation.y,
+      last_uav_pose_->pose.orientation.z,
+      last_uav_pose_->pose.orientation.w
+    );
+    tf2::Matrix3x3 m(q);
+    double r, p;
+    m.getRPY(r, p, uav_yaw);
+  }
+
+  tf2::Quaternion quat;
+  rotation.getRotation(quat);
+
+  tf2::Quaternion q_uav_yaw;
+  q_uav_yaw.setRPY(0.0, 0.0, uav_yaw);
+  
+  // Camera to body (optical to FLU) rotation quaternion: [w=0, x=0.7071, y=-0.7071, z=0]
+  tf2::Quaternion q_cam_body(0.7071067811865475, -0.7071067811865475, 0.0, 0.0);
+  
+  tf2::Quaternion q_tag_world = q_uav_yaw * q_cam_body * quat;
+
+  double roll_w = 0.0;
+  double pitch_w = 0.0;
+  double yaw_w = 0.0;
+  tf2::Matrix3x3(q_tag_world).getRPY(roll_w, pitch_w, yaw_w);
+
   dib_msgs::msg::LandingTarget6D target;
   target.header = header;
   target.x = tvec.x();
@@ -686,7 +717,7 @@ void ArucoFractalTracker::publishTarget(
   target.z = tvec.z();
   target.roll = roll;
   target.pitch = pitch;
-  target.yaw = yaw;
+  target.yaw = yaw_w;
   target.state = tracking_state_;
   target.tag_id = tag_id;
   target_pub_->publish(target);

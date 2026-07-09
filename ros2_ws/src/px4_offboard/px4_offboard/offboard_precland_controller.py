@@ -17,8 +17,8 @@ from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPo
 from dib_msgs.msg import LandingTarget6D
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import String
-from mavros_msgs.msg import State, ExtendedState
-from mavros_msgs.srv import CommandBool, SetMode, CommandLong, ParamGet
+from mavros_msgs.msg import State, ExtendedState, WaypointList
+from mavros_msgs.srv import CommandBool, SetMode, CommandLong, ParamGet, WaypointPull
 
 
 class OffboardPreclandController(Node):
@@ -73,11 +73,14 @@ class OffboardPreclandController(Node):
         self.declare_parameter("camera_offset_y", 0.0)
         self.declare_parameter("marker_size", 0.50)
         self.declare_parameter("target_topic", "/landing/target_camera")
+        self.declare_parameter("target_pose_topic", "/aruco_fractal_tracker/poses")
         self.declare_parameter("align_yaw_to_tag", False)  # TẮT mặc định — ArUco solvePnP yaw không tin cậy
         self.declare_parameter("tag_yaw_sign", 1.0)        # lật dấu nếu xoay ngược chiều
         self.declare_parameter("tag_yaw_offset", 0.0)      # bù offset khung camera→body (rad), calib 1 lần
         self.declare_parameter("precland_mode", 2)          # 0=disabled, 1=opportunistic, 2=required
-        self.declare_parameter("final_alt", 0.18)           # Độ cao bàn giao quyền lại cho PX4 (m)
+        self.declare_parameter("final_alt", 0.15)           # Độ cao bàn giao quyền lại cho PX4 (m)
+        self.declare_parameter("mpc_xy_vel_cruise", 2.0)    # Tốc độ di chuyển Setpoint tối đa (m/s)
+        self.declare_parameter("mpc_acc_hor", 1.0)          # Gia tốc Setpoint tối đa (m/s^2)
 
         self.cam_east_sign = self.get_parameter("camera_x_to_body_east_sign").value
         self.cam_north_sign = self.get_parameter("camera_y_to_body_north_sign").value
@@ -86,11 +89,14 @@ class OffboardPreclandController(Node):
         self.cam_off_y = self.get_parameter("camera_offset_y").value
         self.marker_size = self.get_parameter("marker_size").value
         target_topic = self.get_parameter("target_topic").value
+        self.target_pose_topic = self.get_parameter("target_pose_topic").value
         self.align_yaw_to_tag = bool(self.get_parameter("align_yaw_to_tag").value)
         self.tag_yaw_sign = float(self.get_parameter("tag_yaw_sign").value)
         self.tag_yaw_offset = float(self.get_parameter("tag_yaw_offset").value)
         self.precland_mode = int(self.get_parameter("precland_mode").value)
         self.FINAL_ALT = float(self.get_parameter("final_alt").value)
+        self.param_xy_vel_cruise = float(self.get_parameter("mpc_xy_vel_cruise").value)
+        self.param_acc_hor = float(self.get_parameter("mpc_acc_hor").value)
 
         # State
         self.state = "IDLE"
@@ -102,6 +108,9 @@ class OffboardPreclandController(Node):
         self._tag_yaw_abs: Optional[float] = None  # heading ĐÍCH tuyệt đối (ENU) từ tag
         self._yaw_locked = False                # đã chốt & đóng băng heading đích chưa
         self._yaw_lock_buf: list = []           # bộ đệm mẫu để gộp trước khi chốt
+        self._sp_prev: Optional[np.ndarray] = None
+        self._sp_prev_prev: Optional[np.ndarray] = None
+        self._target_acquired_time: Optional[float] = None
         self.current_mode = ""
         self.landed_state = 0
         self.is_landing = False
@@ -116,6 +125,8 @@ class OffboardPreclandController(Node):
         self.last_pose_time = 0.0
         self.tracking_count = 0
         self.history = deque(maxlen=150)
+        self._waypoints = []
+        self._current_wp_seq = 0
 
         # FSM counters
         self._centered_count = 0
@@ -150,12 +161,14 @@ class OffboardPreclandController(Node):
         self.create_subscription(LandingTarget6D, target_topic, self._on_target, 10)
         self.create_subscription(State, "/mavros/state", self._on_state, state_qos)
         self.create_subscription(ExtendedState, "/mavros/extended_state", self._on_ext_state, state_qos)
+        self.create_subscription(WaypointList, "/mavros/mission/waypoints", self._on_waypoints, state_qos)
 
         # Services
         self.set_mode_client = self.create_client(SetMode, "/mavros/set_mode")
         self.arm_client = self.create_client(CommandBool, "/mavros/cmd/arming")
         self.cmd_client = self.create_client(CommandLong, "/mavros/cmd/command")
         self.param_get_client = self.create_client(ParamGet, "/mavros/param/get")
+        self.wp_pull_client = self.create_client(WaypointPull, "/mavros/mission/pull")
 
         # Main loop
         self.create_timer(1.0 / self.CTRL_HZ, self._loop)
@@ -176,23 +189,41 @@ class OffboardPreclandController(Node):
     def _on_state(self, msg: State) -> None:
         self.current_mode = msg.mode
         self.armed = msg.armed
+        was_connected = self.mavros_connected
         self.mavros_connected = msg.connected
+        if msg.connected and not was_connected:
+            self.get_logger().info("MAVROS connected — pulling waypoints...")
+            self._pull_waypoints_immediately()
+
         was = self.is_landing
         self.is_landing = (msg.mode == "AUTO.LAND")
         if self.is_landing != was:
             self.get_logger().info(f"Landing flag: {self.is_landing} (mode={msg.mode})")
+            if self.is_landing:
+                self._pull_waypoints_immediately()
 
     def _on_ext_state(self, msg: ExtendedState) -> None:
         self.landed_state = msg.landed_state
+        was = self.is_landing
         if not self.is_landing and msg.landed_state == ExtendedState.LANDED_STATE_LANDING:
             self.is_landing = True
+        if self.is_landing != was:
+            self.get_logger().info(f"Landing flag: {self.is_landing} (landed_state={msg.landed_state})")
+            if self.is_landing:
+                self._pull_waypoints_immediately()
+
+    def _on_waypoints(self, msg: WaypointList) -> None:
+        self._waypoints = msg.waypoints
+        self._current_wp_seq = msg.current_seq
+        self.get_logger().info(f"Received waypoints update: {len(msg.waypoints)} items. Active seq: {msg.current_seq}")
+
+    def _pull_waypoints_immediately(self):
+        if self.wp_pull_client.service_is_ready():
+            req_wp = WaypointPull.Request()
+            self.wp_pull_client.call_async(req_wp)
+            self.get_logger().info("Landing phase started — pulling waypoints immediately")
 
     def _on_target(self, msg: LandingTarget6D) -> None:
-        if msg.tag_id < 0 or msg.state == LandingTarget6D.LOST:
-            self.target_samples.clear()
-            self.filtered_rel_enu = None
-            return
-
         self.tracking_count += 1
         tvec = np.array([msg.x, msg.y, msg.z])
         cam_xy = np.array([self.cam_east_sign * tvec[0], self.cam_north_sign * tvec[1]])
@@ -208,42 +239,28 @@ class OffboardPreclandController(Node):
             return
 
         abs_xy = h_pos[:2] + rel
-        self.target_samples.append(abs_xy.copy())
-        stacked = np.stack(tuple(self.target_samples), axis=0)
-        med = np.median(stacked, axis=0)
-        a = self._alpha()
-        if self.filtered_rel_enu is None:
-            self.filtered_rel_enu = med.copy()
-        else:
-            self.filtered_rel_enu = (1.0 - a) * self.filtered_rel_enu + a * med
-
-        self.target_enu = self.filtered_rel_enu.copy()
+        self.target_enu = abs_xy.copy()
         self.target_rel_norm = float(np.linalg.norm(self.target_enu - self.pos_enu[:2]))
         self.last_pose_time = self._now()
 
-        # Heading ĐÍCH tuyệt đối (ENU) = body_yaw(h_q, đồng bộ trễ) + yaw tương đối tag.
-        # CHỐT MỘT LẦN rồi ĐÓNG BĂNG: lúc chốt drone chưa xoay nên phép đo còn hợp lệ;
-        # đóng băng biến mục tiêu thành hằng số → không có vòng hồi tiếp để spin, kể cả
-        # khi gimbal khóa yaw theo world.
-        ty = getattr(msg, "yaw", None)
-        if (
-            ty is not None
-            and self.align_yaw_to_tag
-            and not self._yaw_locked
-            and self.tracking_count >= self.TRACKING_CONFIRM
-        ):
-            body_yaw = self._yaw(h_q)
-            world_yaw = self._wrap(
-                body_yaw + self.tag_yaw_sign * float(ty) + self.tag_yaw_offset
-            )
-            self._yaw_lock_buf.append(world_yaw)
-            if len(self._yaw_lock_buf) >= self.YAW_LOCK_SAMPLES:
-                self._tag_yaw_abs = self._circmean(self._yaw_lock_buf)
-                self._yaw_locked = True
+        # Heading ĐÍCH tuyệt đối (ENU)
+        if self.align_yaw_to_tag and self.state == "DESCEND_ABOVE_TARGET":
+            world_yaw_sample = msg.yaw
+
+            if not self._yaw_locked:
+                self._yaw_lock_buf.append(world_yaw_sample)
+                if len(self._yaw_lock_buf) >= self.YAW_LOCK_SAMPLES:
+                    self._tag_yaw_abs = self._circmean(self._yaw_lock_buf)
+                    self._yaw_locked = True
+                    self.get_logger().info(f"Yaw locked to absolute ENU: {math.degrees(self._tag_yaw_abs):.1f}°")
+
+            if self.tracking_count % 15 == 0:
+                body_yaw = self._yaw(h_q)
                 self.get_logger().info(
-                    f"[YAW-LOCK] chốt target={math.degrees(self._tag_yaw_abs):+.1f}° "
-                    f"(mẫu cuối tag_yaw={math.degrees(float(ty)):+.1f}° body={math.degrees(body_yaw):+.1f}° "
-                    f"sign={self.tag_yaw_sign:+.0f} off={math.degrees(self.tag_yaw_offset):+.1f}°) — đóng băng"
+                    f"[YAW-3D-DEBUG] body_hist={math.degrees(body_yaw):.1f}° | "
+                    f"world_sample={math.degrees(world_yaw_sample):.1f}° | "
+                    f"locked_yaw={math.degrees(self._tag_yaw_abs if self._tag_yaw_abs is not None else 0.0):.1f}° | "
+                    f"sp={math.degrees(self.sp_yaw):.1f}°"
                 )
 
     # ── Time-sync helpers ─────────────────────────────────────
@@ -265,6 +282,17 @@ class OffboardPreclandController(Node):
         return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
 
     @staticmethod
+    def _q_mul(q1, q2):
+        w1, x1, y1, z1 = [float(v) for v in q1]
+        w2, x2, y2, z2 = [float(v) for v in q2]
+        return np.array([
+            w1*w2 - x1*x2 - y1*y2 - z1*z2,
+            w1*x2 + x1*w2 + y1*z2 - z1*y2,
+            w1*y2 - x1*z2 + y1*w2 + z1*x2,
+            w1*z2 + x1*y2 - y1*x2 + z1*w2
+        ])
+
+    @staticmethod
     def _wrap(a):
         return math.atan2(math.sin(a), math.cos(a))
 
@@ -275,18 +303,15 @@ class OffboardPreclandController(Node):
         return math.atan2(s, c)
 
     def _desired_yaw(self):
-        """Giữ nguyên heading lúc takeover cho tới khi tag được khóa chắc chắn.
-        Khi đó slew về heading ĐÍCH TUYỆT ĐỐI (hằng số) — KHÔNG cộng heading sống,
-        nếu không latency vision sẽ làm mục tiêu trôi và drone xoay mòng mòng."""
+        """Liên tục bám theo góc Yaw thế giới đã lọc thông thấp (LPF)."""
         aligning = (
             self.align_yaw_to_tag
-            and self._yaw_locked
-            and self._tag_yaw_abs is not None
+            and self._filtered_tag_yaw_world is not None
             and self.state in ("HORIZONTAL_APPROACH", "DESCEND_ABOVE_TARGET")
         )
         if not aligning:
             return self._held_yaw
-        return self._tag_yaw_abs
+        return self._filtered_tag_yaw_world
 
     def _update_yaw(self):
         """Slew sp_yaw về heading mong muốn — tránh giật yaw."""
@@ -371,12 +396,11 @@ class OffboardPreclandController(Node):
 
     def _query_px4_params(self):
         """Query PX4 parameter RTL_PLD_MD to automatically sync the precision landing mode."""
-        if not self.param_get_client.service_is_ready():
-            return
-        req = ParamGet.Request()
-        req.param_id = "RTL_PLD_MD"
-        future = self.param_get_client.call_async(req)
-        future.add_done_callback(self._on_param_received)
+        if self.param_get_client.service_is_ready():
+            req = ParamGet.Request()
+            req.param_id = "RTL_PLD_MD"
+            future = self.param_get_client.call_async(req)
+            future.add_done_callback(self._on_param_received)
 
     def _on_param_received(self, future):
         try:
@@ -434,6 +458,12 @@ class OffboardPreclandController(Node):
     # ── Main loop ─────────────────────────────────────────────
 
     def _loop(self):
+        # Nếu mất tag (dữ liệu pose bị quá hạn), dọn dẹp các bộ đệm target
+        if not self._target_fresh():
+            self.target_samples.clear()
+            self.filtered_rel_enu = None
+            self.tracking_count = 0
+
         handler = getattr(self, f"_st_{self.state.lower()}", None)
         if handler:
             handler()
@@ -454,11 +484,31 @@ class OffboardPreclandController(Node):
 
     def _st_idle(self):
         """Monitor for AUTO.LAND — chỉ can thiệp khi precland_mode > 0."""
-        if self.precland_mode == 0:
-            return  # Precision landing disabled — không can thiệp
-
         if not (self.is_landing and self.armed):
             return
+
+        # Tự động phát hiện chế độ precision landing cho điểm hạ cánh hiện tại trong bài bay (mission)
+        active_mode = self.precland_mode
+        land_wp = None
+        # Kiểm tra cả waypoint hiện tại và waypoint tiếp theo (tránh trễ đồng bộ active seq từ PX4)
+        for idx in (self._current_wp_seq, self._current_wp_seq + 1):
+            if self._waypoints and idx < len(self._waypoints):
+                wp = self._waypoints[idx]
+                if wp.command in (21, 85):
+                    land_wp = wp
+                    break
+
+        if land_wp is not None:
+            active_mode = int(land_wp.param2)
+            self.get_logger().info(
+                f"Mission landing detected: command={land_wp.command}, precision land mode={active_mode} (seq={self._current_wp_seq})"
+            )
+
+        if active_mode == 0:
+            return  # Precision landing disabled cho lần hạ cánh này — KHÔNG can thiệp
+
+        # Ghi nhận chế độ hoạt động cho lượt hạ cánh này
+        self.precland_mode = active_mode
 
         # Cả mode 1 (opportunistic) và mode 2 (required) đều tự động chiếm quyền OFFBOARD khi bắt đầu land.
         # Sự khác biệt sẽ nằm ở việc xử lý khi không tìm thấy tag ở độ cao detect (10m).
@@ -470,6 +520,7 @@ class OffboardPreclandController(Node):
         self._tag_yaw_abs = None
         self._yaw_locked = False
         self._yaw_lock_buf = []
+        self._filtered_tag_yaw_world = None
         self._start_z_sp = float(self.pos_enu[2])
         self._approach_alt = float(self.pos_enu[2])
         self._search_cnt = 0

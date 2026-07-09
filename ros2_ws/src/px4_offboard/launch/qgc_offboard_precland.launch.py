@@ -96,7 +96,7 @@ def generate_launch_description():
             'marker_size': 0.50,
             'use_sim_time': True,
             'target_topic': '/landing/target_camera',
-            'align_yaw_to_tag': False,
+            'align_yaw_to_tag': True
         }],
         output='screen'
     )
