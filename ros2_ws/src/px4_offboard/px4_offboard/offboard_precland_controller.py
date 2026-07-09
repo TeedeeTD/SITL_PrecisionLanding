@@ -422,7 +422,7 @@ class OffboardPreclandController(Node):
         self.state = new_state
         self.get_logger().info(f"FSM: {old} → {new_state}")
 
-        if new_state in ("IDLE", "START", "HORIZONTAL_APPROACH"):
+        if new_state in ("IDLE", "START"):
             self._yaw_locked = False
             self._tag_yaw_abs = None
             self._yaw_lock_buf.clear()
