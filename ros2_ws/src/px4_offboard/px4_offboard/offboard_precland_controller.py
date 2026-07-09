@@ -105,7 +105,6 @@ class OffboardPreclandController(Node):
         self._tag_yaw_abs: Optional[float] = None  # heading ĐÍCH tuyệt đối (ENU) từ tag
         self._yaw_locked = False                # đã chốt & đóng băng heading đích chưa
         self._yaw_lock_buf: list = []           # bộ đệm mẫu để gộp trước khi chốt
-        self._yaw_realigned = False             # Đã xoay xong yaw và căn chỉnh lại chưa
         self.current_mode = ""
         self.landed_state = 0
         self.is_landing = False
@@ -420,11 +419,6 @@ class OffboardPreclandController(Node):
         old = self.state
         self.state = new_state
         self.get_logger().info(f"FSM: {old} → {new_state}")
-        if new_state == "SEARCH":
-            self._tag_yaw_abs = None
-            self._yaw_locked = False
-            self._yaw_lock_buf = []
-            self._yaw_realigned = False
 
     # ── Mode switching ────────────────────────────────────────
 
@@ -561,7 +555,6 @@ class OffboardPreclandController(Node):
         self._tag_yaw_abs = None
         self._yaw_locked = False
         self._yaw_lock_buf = []
-        self._yaw_realigned = False
         self._start_z_sp = float(self.pos_enu[2])
         self._approach_alt = float(self.pos_enu[2])
         self._search_cnt = 0
@@ -685,43 +678,17 @@ class OffboardPreclandController(Node):
 
         if descent_ok:
             self._descent_drift_count = 0
-            
-            # PHÂN PHA YAW THEO ĐỘ CAO: tới YAW_LOCK_ALT (7m)
-            # 1. Chờ lấy mẫu yaw & chốt
-            waiting_samples = (self.align_yaw_to_tag and not self._yaw_locked
-                               and self.pos_enu[2] <= self.YAW_LOCK_ALT)
-            
-            # 2. Đã chốt nhưng chưa quay xong yaw → tiếp tục chờ (Z-lock)
-            waiting_rotation = False
-            if self.align_yaw_to_tag and self._yaw_locked and not self._yaw_realigned:
-                yaw_err = abs(self._wrap(self._tag_yaw_abs - self._yaw(self.q_att)))
-                if yaw_err > math.radians(3.0):
-                    waiting_rotation = True
-                else:
-                    # Đã xoay xong yaw! Chuyển về HORIZONTAL_APPROACH để căn tâm lần nữa ở 7m
-                    self.get_logger().info(
-                        f"[YAW-ALIGN] Đã xoay xong yaw (sai số {math.degrees(yaw_err):.1f}°). "
-                        f"Chuyển về HORIZONTAL_APPROACH để căn chỉnh ngang lần cuối tại {self.pos_enu[2]:.1f}m"
-                    )
-                    self._yaw_realigned = True
-                    self._approach_alt = float(self.pos_enu[2])
-                    self._transition("HORIZONTAL_APPROACH")
-                    return
-
-            if waiting_samples:
+            # PHÂN PHA YAW THEO ĐỘ CAO: tới YAW_LOCK_ALT (7m) mà CHƯA chốt heading →
+            # DỪNG HẠ, giữ độ cao để _on_target gom đủ mẫu rồi _latch_yaw() đóng băng.
+            # Sau khi chốt (hoặc khi align tắt) → hạ tiếp bình thường.
+            waiting_yaw = (self.align_yaw_to_tag and not self._yaw_locked
+                           and self.pos_enu[2] <= self.YAW_LOCK_ALT)
+            if waiting_yaw:
                 # Giữ nguyên _descent_z_sp (không hạ) — treo ở ~7m chờ đủ mẫu
                 if self._target_counter % self.CTRL_HZ == 0:
                     self.get_logger().info(
                         f"YAW-SAMPLING tại {self.pos_enu[2]:.1f}m: "
                         f"{len(self._yaw_lock_buf)}/{self.YAW_LOCK_SAMPLES} mẫu"
-                    )
-            elif waiting_rotation:
-                # Giữ nguyên _descent_z_sp (không hạ) — treo ở ~7m chờ xoay xong yaw
-                if self._target_counter % self.CTRL_HZ == 0:
-                    yaw_err = abs(self._wrap(self._tag_yaw_abs - self._yaw(self.q_att)))
-                    self.get_logger().info(
-                        f"YAW-ROTATING tại {self.pos_enu[2]:.1f}m: "
-                        f"sai số còn {math.degrees(yaw_err):.1f}°"
                     )
             else:
                 self._descent_z_sp = max(
@@ -746,7 +713,21 @@ class OffboardPreclandController(Node):
                     self._transition("HORIZONTAL_APPROACH")
                 return
 
-        self.sp_enu = self._visual_sp(self._descent_z_sp, self.MAX_DESCENT_STEP)
+        # Căn chỉnh XY mọi lúc, trừ lúc đang xoay Yaw (chênh lệch yaw > 3 độ)
+        current_yaw = self._yaw(self.q_att)
+        yaw_err = abs(self._wrap(self.sp_yaw - current_yaw))
+        rotating = (self.align_yaw_to_tag and self._yaw_locked 
+                    and yaw_err > math.radians(3.0))
+
+        if rotating:
+            # Giữ nguyên setpoint XY cũ, chỉ cập nhật độ cao mục tiêu Z
+            self.sp_enu[2] = self._descent_z_sp
+            if self._target_counter % 15 == 0:
+                self.get_logger().info(
+                    f"ROTATING YAW: err={math.degrees(yaw_err):.1f}° — tạm dừng căn chỉnh XY"
+                )
+        else:
+            self.sp_enu = self._visual_sp(self._descent_z_sp, self.MAX_DESCENT_STEP)
 
         if self._target_counter % self.CTRL_HZ == 0:
             phase = "descending" if descent_ok else "z-locked"
