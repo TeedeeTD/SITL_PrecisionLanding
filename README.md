@@ -484,3 +484,50 @@ ros2 run rqt_image_view rqt_image_view
 *Chọn topic `/landing/annotated_image` từ thanh công cụ để theo dõi trực quan trạng thái FSM, tọa độ bám bắt, và các thông tin chẩn đoán trực tiếp.*
 
 `qgc_sim_precland.launch.py` không khởi động MAVROS. Khi cần sửa/restart tracker hoặc lander, chỉ restart Terminal 3. Không restart Terminal 2, như vậy PX4 vẫn nhận heartbeat mission computer từ MAVROS liên tục.
+
+### 2.3. Hướng Dẫn Chạy Precland Điều Khiển Bằng PX4 Chế Độ Offboard:
+Sử dụng [qgc_offboard_precland.launch.py](file:///home/teedee/PX4/examples/SITL_PrecisionLanding/ros2_ws/src/px4_offboard/launch/qgc_offboard_precland.launch.py) và [offboard_precland_controller.py](file:///home/teedee/PX4/examples/SITL_PrecisionLanding/ros2_ws/src/px4_offboard/px4_offboard/offboard_precland_controller.py):
+
+#### Dọn Tiến Trình Cũ:
+```bash
+pkill -9 -f "gz sim|px4|mavros|tracker|lander|rqt_image_view|ros_gz"
+```
+
+#### Terminal 1: Khởi động PX4 SITL:
+```bash
+cd ~/PX4
+PX4_GZ_WORLD=fractal_aruco_landing PX4_GZ_NO_FOLLOW=1 make px4_sitl gz_x500_gimbal
+```
+
+#### Terminal 2: Chạy MAVROS một lần và giữ nguyên:
+```bash
+source /opt/ros/humble/setup.bash
+ros2 launch mavros px4.launch fcu_url:=udp://:14540@127.0.0.1:14580
+```
+Kiểm tra MAVROS đã nối PX4:
+```bash
+source /opt/ros/humble/setup.bash
+source ~/SITL_PrecisionLanding/ros2_ws/install/setup.bash
+ros2 topic echo --once /mavros/state
+```
+Kỳ vọng:
+```text
+connected: true
+```
+
+#### Terminal 3: Khởi động bridge camera, tracker và lander:
+```bash
+source /opt/ros/humble/setup.bash
+source ~/SITL_PrecisionLanding/ros2_ws/install/setup.bash
+ros2 launch px4_offboard qgc_offboard_precland.launch.py
+```
+
+#### Terminal 4: Xem luồng camera có HUD overlay trực quan:
+```bash
+source /opt/ros/humble/setup.bash
+ros2 run rqt_image_view rqt_image_view
+```
+*Chọn topic `/landing/annotated_image` từ thanh công cụ để theo dõi trực quan trạng thái FSM, tọa độ bám bắt, và các thông tin chẩn đoán trực tiếp.*
+
+`qgc_offboard_precland.launch.py` không khởi động MAVROS. Khi cần sửa/restart tracker hoặc lander, chỉ restart Terminal 3. Không restart Terminal 2, như vậy PX4 vẫn nhận heartbeat mission computer từ MAVROS liên tục.
+
