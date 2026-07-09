@@ -63,6 +63,7 @@ class OffboardPreclandController(Node):
     YAW_SLEW_RATE = 0.6        # rad/s — slew heading nhẹ sau khi đã khóa tag
     YAW_LOCK_SAMPLES = 15      # số mẫu yaw gom TẠI YAW_LOCK_ALT trước khi đóng băng heading
     YAW_LOCK_ALT = 7.0         # độ cao (m) dừng lại lấy mẫu yaw rồi đóng băng
+    YAW_LOCK_ALT_2 = 3.0       # độ cao (m) dừng lại khóa yaw lần 2 (chính xác hơn)
 
     def __init__(self) -> None:
         super().__init__("offboard_precland_controller")
@@ -107,6 +108,7 @@ class OffboardPreclandController(Node):
         self._yaw_lock_buf: list = []           # bộ đệm mẫu để gộp trước khi chốt
         self._yaw_realign_complete = False     # đã hoàn thành xoay yaw và căn chỉnh lại XY tại 7m chưa
         self._realign_cnt = 0                   # đếm mẫu căn chỉnh ổn định sau khi xoay yaw
+        self._yaw_lock_stage = 0                # Giai đoạn khóa yaw (0: chưa khóa, 1: khóa 7m, 2: khóa 3m)
         self.current_mode = ""
         self.landed_state = 0
         self.is_landing = False
@@ -263,11 +265,11 @@ class OffboardPreclandController(Node):
             if self.tag_yaw_offset != 0.0:
                 world_yaw_sample = self._wrap(world_yaw_sample + self.tag_yaw_offset)
 
-            # PHÂN PHA THEO ĐỘ CAO: chỉ gom mẫu khi ĐÃ HẠ tới YAW_LOCK_ALT (7m) trong
-            # pha DESCEND và CHƯA chốt. Đủ YAW_LOCK_SAMPLES mẫu → đóng băng heading NGAY.
-            # Trên 7m (APPROACH + DESCEND 10→7): KHÔNG gom, KHÔNG xoay yaw (giữ heading).
+            # PHÂN PHA THEO ĐỘ CAO: chỉ gom mẫu khi ĐÃ HẠ tới độ cao khóa yaw tương ứng và CHƯA chốt.
+            # Trên độ cao khóa (APPROACH hoặc DESCEND trên 7m/3m): KHÔNG gom, KHÔNG xoay yaw.
+            target_lock_alt = self.YAW_LOCK_ALT if self._yaw_lock_stage <= 1 else self.YAW_LOCK_ALT_2
             if (self.state == "DESCEND_ABOVE_TARGET" and not self._yaw_locked
-                    and self.pos_enu[2] <= self.YAW_LOCK_ALT):
+                    and self.pos_enu[2] <= target_lock_alt):
                 self._yaw_lock_buf.append(world_yaw_sample)
                 if len(self._yaw_lock_buf) >= self.YAW_LOCK_SAMPLES:
                     self._latch_yaw()
@@ -277,7 +279,7 @@ class OffboardPreclandController(Node):
                 tgt = (f"{math.degrees(self._tag_yaw_abs):.1f}°"
                        if self._tag_yaw_abs is not None else "—")
                 self.get_logger().info(
-                    f"[YAW-3D] alt={self.pos_enu[2]:.1f}m body={math.degrees(body_yaw):.1f}° | "
+                    f"[YAW-3D] alt={self.pos_enu[2]:.1f}m stage={self._yaw_lock_stage} body={math.degrees(body_yaw):.1f}° | "
                     f"world_sample={math.degrees(world_yaw_sample):.1f}° | "
                     f"locked={self._yaw_locked} target={tgt} | "
                     f"buf={len(self._yaw_lock_buf)}/{self.YAW_LOCK_SAMPLES} | "
@@ -342,13 +344,14 @@ class OffboardPreclandController(Node):
             )
 
     def _desired_yaw(self):
-        """Trước khi CHỐT (APPROACH + DESCEND trên 7m): GIỮ heading (_held_yaw) —
-        KHÔNG xoay yaw, đúng như align_yaw_to_tag=False. Chốt chỉ xảy ra tại 7m sau khi
-        gom đủ mẫu. Sau khi chốt: luôn lệnh heading ĐÓNG BĂNG (hằng số)."""
-        if not (self.align_yaw_to_tag and self._yaw_locked
-                and self._tag_yaw_abs is not None):
+        """Trước khi CHỐT lần đầu (APPROACH + DESCEND trên 7m): GIỮ heading (_held_yaw).
+        Sau khi chốt lần đầu hoặc lần 2: lệnh heading tuyệt đối đóng băng từ tag.
+        Giữ nguyên góc cũ trong khi đang gom mẫu ở 3m (stage 2)."""
+        if not self.align_yaw_to_tag:
             return self._held_yaw
-        return self._tag_yaw_abs
+        if self._tag_yaw_abs is not None:
+            return self._tag_yaw_abs
+        return self._held_yaw
 
     def _update_yaw(self):
         """Slew sp_yaw về heading mong muốn — tránh giật yaw."""
@@ -428,6 +431,7 @@ class OffboardPreclandController(Node):
             self._yaw_lock_buf.clear()
             self._yaw_realign_complete = False
             self._realign_cnt = 0
+            self._yaw_lock_stage = 0
 
     # ── Mode switching ────────────────────────────────────────
 
@@ -685,10 +689,29 @@ class OffboardPreclandController(Node):
                 self._transition("FINAL_APPROACH")
                 return
 
-        # Check if we are in the 7m hover phase for yaw alignment & re-centering
-        in_7m_hover = (self.align_yaw_to_tag 
-                       and not self._yaw_realign_complete 
-                       and self.pos_enu[2] <= self.YAW_LOCK_ALT)
+        # Kích hoạt từng stage khóa yaw tùy theo độ cao hiện tại
+        if self.align_yaw_to_tag:
+            if self._yaw_lock_stage == 0 and self.pos_enu[2] <= self.YAW_LOCK_ALT:
+                self._yaw_lock_stage = 1
+                self._yaw_locked = False
+                self._yaw_lock_buf.clear()
+                self._yaw_realign_complete = False
+                self._realign_cnt = 0
+                self.get_logger().info("Entering Stage 1 Yaw Lock at 7m")
+            elif (self._yaw_lock_stage == 1 
+                  and self._yaw_realign_complete 
+                  and self.pos_enu[2] <= self.YAW_LOCK_ALT_2):
+                self._yaw_lock_stage = 2
+                self._yaw_locked = False
+                self._yaw_lock_buf.clear()
+                self._yaw_realign_complete = False
+                self._realign_cnt = 0
+                self.get_logger().info("Entering Stage 2 Yaw Lock at 3m")
+
+        # Kiểm tra xem có đang ở trong pha hover khóa yaw / căn chỉnh lại của stage 1 hoặc stage 2 không
+        in_lock_hover = (self.align_yaw_to_tag 
+                         and not self._yaw_realign_complete 
+                         and self._yaw_lock_stage in (1, 2))
 
         # Căn chỉnh XY mọi lúc, trừ lúc đang xoay Yaw (chênh lệch yaw > 3 độ)
         current_yaw = self._yaw(self.q_att)
@@ -696,20 +719,21 @@ class OffboardPreclandController(Node):
         rotating = (self.align_yaw_to_tag and self._yaw_locked 
                     and yaw_err > math.radians(3.0))
 
-        if in_7m_hover:
-            self._descent_z_sp = self.YAW_LOCK_ALT
-            self._descent_drift_count = 0  # Bỏ qua drift check khi đang chủ động hover ở 7m
+        if in_lock_hover:
+            hover_z = self.YAW_LOCK_ALT if self._yaw_lock_stage == 1 else self.YAW_LOCK_ALT_2
+            self._descent_z_sp = hover_z
+            self._descent_drift_count = 0  # Bỏ qua drift check khi đang chủ động hover
 
             if not self._yaw_locked:
                 if self._target_counter % 15 == 0:
                     self.get_logger().info(
-                        f"YAW-SAMPLING tại {self.pos_enu[2]:.1f}m: "
+                        f"YAW-SAMPLING [Stage {self._yaw_lock_stage}] tại {self.pos_enu[2]:.1f}m: "
                         f"{len(self._yaw_lock_buf)}/{self.YAW_LOCK_SAMPLES} mẫu"
                     )
             elif rotating:
                 if self._target_counter % 15 == 0:
                     self.get_logger().info(
-                        f"YAW-ALIGN (ROTATING): err={math.degrees(yaw_err):.1f}° — giữ nguyên XY"
+                        f"YAW-ALIGN (ROTATING) [Stage {self._yaw_lock_stage}]: err={math.degrees(yaw_err):.1f}° — giữ nguyên XY"
                     )
             else:
                 # Đã xoay xong yaw, bắt đầu căn chỉnh lại XY trước khi hạ tiếp
@@ -718,13 +742,13 @@ class OffboardPreclandController(Node):
                     self._realign_cnt += 1
                     if self._realign_cnt >= 15:  # ổn định trong 15 mẫu (~0.5s)
                         self._yaw_realign_complete = True
-                        self.get_logger().info("YAW-ALIGN & RE-CENTERING COMPLETE — bắt đầu hạ tiếp")
+                        self.get_logger().info(f"YAW-ALIGN & RE-CENTERING COMPLETE [Stage {self._yaw_lock_stage}] — bắt đầu hạ tiếp")
                 else:
                     self._realign_cnt = 0
 
                 if self._target_counter % 15 == 0:
                     self.get_logger().info(
-                        f"YAW-ALIGN (RE-CENTERING): err={self.target_rel_norm:.2f}m (gate={dr:.2f}m), "
+                        f"YAW-ALIGN (RE-CENTERING) [Stage {self._yaw_lock_stage}]: err={self.target_rel_norm:.2f}m (gate={dr:.2f}m), "
                         f"stable_cnt={self._realign_cnt}/15"
                     )
         else:
