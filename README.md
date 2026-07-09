@@ -431,7 +431,7 @@ Không dùng force-disarm làm tiêu chuẩn thành công khi chạy thật.
 
 ### 2.1. Chạy detect bằng cam thật:
 ```bash
-source ~/PX4/examples/SITL_PrecisionLanding/ros2_ws/install/setup.bash 
+source ~/PX4/examples/SITL_PrecisionLanding/ros2_ws/install/setup.bash
 ros2 launch siyi_camera_bridge real_fractal_detect.launch.py \
   enable_mavros:=false \
   rtsp_url:=rtsp://192.168.168.16:8554/main.264 \
@@ -507,7 +507,7 @@ ros2 launch mavros px4.launch fcu_url:=udp://:14540@127.0.0.1:14580
 Kiểm tra MAVROS đã nối PX4:
 ```bash
 source /opt/ros/humble/setup.bash
-source ~/SITL_PrecisionLanding/ros2_ws/install/setup.bash
+source ~/PX4/examples/SITL_PrecisionLanding/ros2_ws/install/setup.bash
 ros2 topic echo --once /mavros/state
 ```
 Kỳ vọng:
@@ -518,7 +518,7 @@ connected: true
 #### Terminal 3: Khởi động bridge camera, tracker và lander:
 ```bash
 source /opt/ros/humble/setup.bash
-source ~/SITL_PrecisionLanding/ros2_ws/install/setup.bash
+source ~/PX4/examples/SITL_PrecisionLanding/ros2_ws/install/setup.bash
 ros2 launch px4_offboard qgc_offboard_precland.launch.py
 ```
 
