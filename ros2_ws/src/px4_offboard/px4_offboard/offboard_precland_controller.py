@@ -27,7 +27,6 @@ class OffboardPreclandController(Node):
     TARGET_TIMEOUT = 1.2
     TRACKING_CONFIRM = 10
     ALIGN_CONFIRM = 6
-    YAW_LOCK_SAMPLES = 15     # số mẫu yaw gom trong HORIZONTAL_APPROACH trước khi chốt
     ALIGN_TIMEOUT = 18.0
     SEARCH_TIMEOUT = 35.0
     MAX_SEARCH = 3
@@ -62,7 +61,8 @@ class OffboardPreclandController(Node):
     SEARCH_ALT = 10.0          # Độ cao tìm/bắt tag (tag chỉ detect được ≤ ~11m)
     SEARCH_ALT_MAX = 11.0      # Cap cứng — không bao giờ leo cao hơn mức này khi search
     YAW_SLEW_RATE = 0.6        # rad/s — slew heading nhẹ sau khi đã khóa tag
-    YAW_LOCK_SAMPLES = 8       # số mẫu gộp trước khi CHỐT heading đích rồi đóng băng
+    YAW_LOCK_SAMPLES = 15      # số mẫu yaw gom TẠI YAW_LOCK_ALT trước khi đóng băng heading
+    YAW_LOCK_ALT = 7.0         # độ cao (m) dừng lại lấy mẫu yaw rồi đóng băng
 
     def __init__(self) -> None:
         super().__init__("offboard_precland_controller")
@@ -261,23 +261,25 @@ class OffboardPreclandController(Node):
             if self.tag_yaw_offset != 0.0:
                 world_yaw_sample = self._wrap(world_yaw_sample + self.tag_yaw_offset)
 
-            # GOM MẪU chỉ trong HORIZONTAL_APPROACH (drone đang căn tâm, gần bằng phẳng,
-            # thấy tag rõ) và chỉ khi CHƯA chốt. KHÔNG ra lệnh yaw ở pha này.
-            # Việc chốt (đóng băng heading đích) diễn ra tại điểm chuyển APPROACH→DESCEND.
-            if self.state == "HORIZONTAL_APPROACH" and not self._yaw_locked:
+            # PHÂN PHA THEO ĐỘ CAO: chỉ gom mẫu khi ĐÃ HẠ tới YAW_LOCK_ALT (7m) trong
+            # pha DESCEND và CHƯA chốt. Đủ YAW_LOCK_SAMPLES mẫu → đóng băng heading NGAY.
+            # Trên 7m (APPROACH + DESCEND 10→7): KHÔNG gom, KHÔNG xoay yaw (giữ heading).
+            if (self.state == "DESCEND_ABOVE_TARGET" and not self._yaw_locked
+                    and self.pos_enu[2] <= self.YAW_LOCK_ALT):
                 self._yaw_lock_buf.append(world_yaw_sample)
-                if len(self._yaw_lock_buf) > self.YAW_LOCK_SAMPLES:
-                    self._yaw_lock_buf.pop(0)
+                if len(self._yaw_lock_buf) >= self.YAW_LOCK_SAMPLES:
+                    self._latch_yaw()
 
             if self.tracking_count % 15 == 0:
                 body_yaw = self._yaw(h_q)
                 tgt = (f"{math.degrees(self._tag_yaw_abs):.1f}°"
                        if self._tag_yaw_abs is not None else "—")
                 self.get_logger().info(
-                    f"[YAW-3D] body={math.degrees(body_yaw):.1f}° | "
+                    f"[YAW-3D] alt={self.pos_enu[2]:.1f}m body={math.degrees(body_yaw):.1f}° | "
                     f"world_sample={math.degrees(world_yaw_sample):.1f}° | "
                     f"locked={self._yaw_locked} target={tgt} | "
-                    f"buf={len(self._yaw_lock_buf)} | sp={math.degrees(self.sp_yaw):.1f}°"
+                    f"buf={len(self._yaw_lock_buf)}/{self.YAW_LOCK_SAMPLES} | "
+                    f"sp={math.degrees(self.sp_yaw):.1f}°"
                 )
 
     # ── Time-sync helpers ─────────────────────────────────────
@@ -320,8 +322,8 @@ class OffboardPreclandController(Node):
         return math.atan2(s, c)
 
     def _latch_yaw(self):
-        """Chốt & ĐÓNG BĂNG heading đích từ các mẫu gom trong HORIZONTAL_APPROACH.
-        Gọi đúng một lần tại điểm chuyển APPROACH→DESCEND."""
+        """Chốt & ĐÓNG BĂNG heading đích từ các mẫu gom TẠI YAW_LOCK_ALT (7m).
+        Gọi khi bộ đệm đã đủ YAW_LOCK_SAMPLES mẫu."""
         if not self.align_yaw_to_tag or self._yaw_locked:
             return
         if self._yaw_lock_buf:
@@ -329,19 +331,18 @@ class OffboardPreclandController(Node):
             self._yaw_locked = True
             self.get_logger().info(
                 f"[YAW-LOCK] chốt target={math.degrees(self._tag_yaw_abs):.1f}° "
-                f"từ {len(self._yaw_lock_buf)} mẫu — đóng băng, bắt đầu căn yaw ở DESCEND"
+                f"từ {len(self._yaw_lock_buf)} mẫu tại {self.pos_enu[2]:.1f}m — "
+                f"đóng băng, tiếp tục căn + hạ với yaw đã căn"
             )
         else:
             self.get_logger().warn(
-                "[YAW-LOCK] chưa gom được mẫu yaw nào trong APPROACH — giữ heading"
+                "[YAW-LOCK] chưa gom được mẫu yaw nào — giữ heading"
             )
 
     def _desired_yaw(self):
-        """Trước khi CHỐT (pha đầu: START / HORIZONTAL_APPROACH / SEARCH): GIỮ heading
-        (_held_yaw) — KHÔNG căn yaw, đúng như align_yaw_to_tag=False.
-        Việc chốt chỉ xảy ra tại điểm APPROACH→DESCEND, nên yaw thực sự chỉ bắt đầu
-        động ở DESCEND. Sau khi chốt: luôn lệnh heading đã ĐÓNG BĂNG (hằng số), giữ
-        nguyên kể cả nếu tạm quay lại APPROACH — tránh giật yaw sát đất."""
+        """Trước khi CHỐT (APPROACH + DESCEND trên 7m): GIỮ heading (_held_yaw) —
+        KHÔNG xoay yaw, đúng như align_yaw_to_tag=False. Chốt chỉ xảy ra tại 7m sau khi
+        gom đủ mẫu. Sau khi chốt: luôn lệnh heading ĐÓNG BĂNG (hằng số)."""
         if not (self.align_yaw_to_tag and self._yaw_locked
                 and self._tag_yaw_abs is not None):
             return self._held_yaw
@@ -615,7 +616,7 @@ class OffboardPreclandController(Node):
             self._search_start = None
 
     def _st_horizontal_approach(self):
-        """Move horizontally over target, hold altitude."""
+        """Căn ngang trên target, GIỮ độ cao (~10m), GIỮ heading (chưa xoay yaw)."""
         if not self._target_fresh():
             self.get_logger().warn("Target lost during approach")
             self._target_lost_start = self._now()
@@ -637,8 +638,8 @@ class OffboardPreclandController(Node):
             )
         self._target_counter += 1
 
+        # Ổn định (căn tâm) → bắt đầu hạ. Yaw VẪN chưa xoay; sẽ chốt tại 7m trong DESCEND.
         if self._centered_count >= self.ALIGN_CONFIRM:
-            self._latch_yaw()   # chốt heading đích TRƯỚC khi vào DESCEND
             self._descent_z_sp = float(self.pos_enu[2])
             self._target_counter = 0
             self._centered_count = 0
@@ -649,7 +650,6 @@ class OffboardPreclandController(Node):
         if self._align_start and (self._now() - self._align_start) > self.ALIGN_TIMEOUT:
             dr = self._descent_r()
             if self.target_rel_norm <= dr:
-                self._latch_yaw()   # chốt heading đích TRƯỚC khi vào DESCEND
                 self._descent_z_sp = float(self.pos_enu[2])
                 self._target_counter = 0
                 self._transition("DESCEND_ABOVE_TARGET")
@@ -657,7 +657,8 @@ class OffboardPreclandController(Node):
             self._align_start = self._now()
 
     def _st_descend_above_target(self):
-        """Descend with Z-lock when drifting off center."""
+        """Vừa căn tâm vừa hạ. Dừng tại YAW_LOCK_ALT (7m) để gom mẫu yaw + đóng băng,
+        sau đó tiếp tục căn + hạ với yaw đã căn. Z-lock khi lệch tâm."""
         if not self._target_fresh():
             self._target_lost_start = self._now()
             self._target_lost_from = "DESCEND_ABOVE_TARGET"
@@ -677,10 +678,23 @@ class OffboardPreclandController(Node):
 
         if descent_ok:
             self._descent_drift_count = 0
-            self._descent_z_sp = max(
-                self.FINAL_ALT,
-                self._descent_z_sp - self.DESCENT_RATE / self.CTRL_HZ,
-            )
+            # PHÂN PHA YAW THEO ĐỘ CAO: tới YAW_LOCK_ALT (7m) mà CHƯA chốt heading →
+            # DỪNG HẠ, giữ độ cao để _on_target gom đủ mẫu rồi _latch_yaw() đóng băng.
+            # Sau khi chốt (hoặc khi align tắt) → hạ tiếp bình thường.
+            waiting_yaw = (self.align_yaw_to_tag and not self._yaw_locked
+                           and self.pos_enu[2] <= self.YAW_LOCK_ALT)
+            if waiting_yaw:
+                # Giữ nguyên _descent_z_sp (không hạ) — treo ở ~7m chờ đủ mẫu
+                if self._target_counter % self.CTRL_HZ == 0:
+                    self.get_logger().info(
+                        f"YAW-SAMPLING tại {self.pos_enu[2]:.1f}m: "
+                        f"{len(self._yaw_lock_buf)}/{self.YAW_LOCK_SAMPLES} mẫu"
+                    )
+            else:
+                self._descent_z_sp = max(
+                    self.FINAL_ALT,
+                    self._descent_z_sp - self.DESCENT_RATE / self.CTRL_HZ,
+                )
         else:
             # Z-LOCK: freeze altitude when drifting
             self._descent_drift_count += 1
