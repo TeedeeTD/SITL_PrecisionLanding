@@ -27,6 +27,7 @@ class OffboardPreclandController(Node):
     TARGET_TIMEOUT = 1.2
     TRACKING_CONFIRM = 10
     ALIGN_CONFIRM = 6
+    YAW_LOCK_SAMPLES = 15     # số mẫu yaw gom trong HORIZONTAL_APPROACH trước khi chốt
     ALIGN_TIMEOUT = 18.0
     SEARCH_TIMEOUT = 35.0
     MAX_SEARCH = 3
@@ -78,9 +79,7 @@ class OffboardPreclandController(Node):
         self.declare_parameter("tag_yaw_sign", 1.0)        # lật dấu nếu xoay ngược chiều
         self.declare_parameter("tag_yaw_offset", 0.0)      # bù offset khung camera→body (rad), calib 1 lần
         self.declare_parameter("precland_mode", 2)          # 0=disabled, 1=opportunistic, 2=required
-        self.declare_parameter("final_alt", 0.15)           # Độ cao bàn giao quyền lại cho PX4 (m)
-        self.declare_parameter("mpc_xy_vel_cruise", 2.0)    # Tốc độ di chuyển Setpoint tối đa (m/s)
-        self.declare_parameter("mpc_acc_hor", 1.0)          # Gia tốc Setpoint tối đa (m/s^2)
+        self.declare_parameter("final_alt", 0.18)           # Độ cao bàn giao quyền lại cho PX4 (m)
 
         self.cam_east_sign = self.get_parameter("camera_x_to_body_east_sign").value
         self.cam_north_sign = self.get_parameter("camera_y_to_body_north_sign").value
@@ -95,8 +94,6 @@ class OffboardPreclandController(Node):
         self.tag_yaw_offset = float(self.get_parameter("tag_yaw_offset").value)
         self.precland_mode = int(self.get_parameter("precland_mode").value)
         self.FINAL_ALT = float(self.get_parameter("final_alt").value)
-        self.param_xy_vel_cruise = float(self.get_parameter("mpc_xy_vel_cruise").value)
-        self.param_acc_hor = float(self.get_parameter("mpc_acc_hor").value)
 
         # State
         self.state = "IDLE"
@@ -108,9 +105,6 @@ class OffboardPreclandController(Node):
         self._tag_yaw_abs: Optional[float] = None  # heading ĐÍCH tuyệt đối (ENU) từ tag
         self._yaw_locked = False                # đã chốt & đóng băng heading đích chưa
         self._yaw_lock_buf: list = []           # bộ đệm mẫu để gộp trước khi chốt
-        self._sp_prev: Optional[np.ndarray] = None
-        self._sp_prev_prev: Optional[np.ndarray] = None
-        self._target_acquired_time: Optional[float] = None
         self.current_mode = ""
         self.landed_state = 0
         self.is_landing = False
@@ -158,7 +152,7 @@ class OffboardPreclandController(Node):
 
         # Subscribers
         self.create_subscription(PoseStamped, "/mavros/local_position/pose", self._on_pos, pose_qos)
-        self.create_subscription(LandingTarget6D, target_topic, self._on_target, 10)
+        self.create_subscription(PoseStamped, self.target_pose_topic, self._on_target, 10)
         self.create_subscription(State, "/mavros/state", self._on_state, state_qos)
         self.create_subscription(ExtendedState, "/mavros/extended_state", self._on_ext_state, state_qos)
         self.create_subscription(WaypointList, "/mavros/mission/waypoints", self._on_waypoints, state_qos)
@@ -223,9 +217,9 @@ class OffboardPreclandController(Node):
             self.wp_pull_client.call_async(req_wp)
             self.get_logger().info("Landing phase started — pulling waypoints immediately")
 
-    def _on_target(self, msg: LandingTarget6D) -> None:
+    def _on_target(self, msg: PoseStamped) -> None:
         self.tracking_count += 1
-        tvec = np.array([msg.x, msg.y, msg.z])
+        tvec = np.array([msg.pose.position.x, msg.pose.position.y, msg.pose.position.z])
         cam_xy = np.array([self.cam_east_sign * tvec[0], self.cam_north_sign * tvec[1]])
 
         t_time = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
@@ -243,24 +237,47 @@ class OffboardPreclandController(Node):
         self.target_rel_norm = float(np.linalg.norm(self.target_enu - self.pos_enu[:2]))
         self.last_pose_time = self._now()
 
-        # Heading ĐÍCH tuyệt đối (ENU)
-        if self.align_yaw_to_tag and self.state == "DESCEND_ABOVE_TARGET":
-            world_yaw_sample = msg.yaw
+        # Heading ĐÍCH tuyệt đối (ENU) bằng phép nhân quaternion 3D trực tiếp
+        if self.align_yaw_to_tag:
+            # Trích xuất quaternion của tag trong hệ tọa độ camera
+            q_tag_cam = np.array([
+                msg.pose.orientation.w,
+                msg.pose.orientation.x,
+                msg.pose.orientation.y,
+                msg.pose.orientation.z
+            ])
+            # Camera to body (optical to FLU)
+            # R_cam_body tương ứng với q_cam_body = [0.0, 0.7071067811865475, -0.7071067811865475, 0.0]
+            q_cam_body = np.array([0.0, 0.7071067811865475, -0.7071067811865475, 0.0])
 
-            if not self._yaw_locked:
+            # Hướng tuyệt đối của tag trong hệ thế giới (ENU):
+            # q_tag_world = h_q * q_cam_body * q_tag_cam
+            q_tag_world = self._q_mul(self._q_mul(h_q, q_cam_body), q_tag_cam)
+
+            # Trích xuất góc yaw tuyệt đối trong hệ thế giới (ENU)
+            world_yaw_sample = self._yaw(q_tag_world)
+
+            # Áp dụng bù tag_yaw_offset nếu có
+            if self.tag_yaw_offset != 0.0:
+                world_yaw_sample = self._wrap(world_yaw_sample + self.tag_yaw_offset)
+
+            # GOM MẪU chỉ trong HORIZONTAL_APPROACH (drone đang căn tâm, gần bằng phẳng,
+            # thấy tag rõ) và chỉ khi CHƯA chốt. KHÔNG ra lệnh yaw ở pha này.
+            # Việc chốt (đóng băng heading đích) diễn ra tại điểm chuyển APPROACH→DESCEND.
+            if self.state == "HORIZONTAL_APPROACH" and not self._yaw_locked:
                 self._yaw_lock_buf.append(world_yaw_sample)
-                if len(self._yaw_lock_buf) >= self.YAW_LOCK_SAMPLES:
-                    self._tag_yaw_abs = self._circmean(self._yaw_lock_buf)
-                    self._yaw_locked = True
-                    self.get_logger().info(f"Yaw locked to absolute ENU: {math.degrees(self._tag_yaw_abs):.1f}°")
+                if len(self._yaw_lock_buf) > self.YAW_LOCK_SAMPLES:
+                    self._yaw_lock_buf.pop(0)
 
             if self.tracking_count % 15 == 0:
                 body_yaw = self._yaw(h_q)
+                tgt = (f"{math.degrees(self._tag_yaw_abs):.1f}°"
+                       if self._tag_yaw_abs is not None else "—")
                 self.get_logger().info(
-                    f"[YAW-3D-DEBUG] body_hist={math.degrees(body_yaw):.1f}° | "
+                    f"[YAW-3D] body={math.degrees(body_yaw):.1f}° | "
                     f"world_sample={math.degrees(world_yaw_sample):.1f}° | "
-                    f"locked_yaw={math.degrees(self._tag_yaw_abs if self._tag_yaw_abs is not None else 0.0):.1f}° | "
-                    f"sp={math.degrees(self.sp_yaw):.1f}°"
+                    f"locked={self._yaw_locked} target={tgt} | "
+                    f"buf={len(self._yaw_lock_buf)} | sp={math.degrees(self.sp_yaw):.1f}°"
                 )
 
     # ── Time-sync helpers ─────────────────────────────────────
@@ -302,16 +319,33 @@ class OffboardPreclandController(Node):
         c = sum(math.cos(a) for a in angles)
         return math.atan2(s, c)
 
+    def _latch_yaw(self):
+        """Chốt & ĐÓNG BĂNG heading đích từ các mẫu gom trong HORIZONTAL_APPROACH.
+        Gọi đúng một lần tại điểm chuyển APPROACH→DESCEND."""
+        if not self.align_yaw_to_tag or self._yaw_locked:
+            return
+        if self._yaw_lock_buf:
+            self._tag_yaw_abs = self._circmean(self._yaw_lock_buf)
+            self._yaw_locked = True
+            self.get_logger().info(
+                f"[YAW-LOCK] chốt target={math.degrees(self._tag_yaw_abs):.1f}° "
+                f"từ {len(self._yaw_lock_buf)} mẫu — đóng băng, bắt đầu căn yaw ở DESCEND"
+            )
+        else:
+            self.get_logger().warn(
+                "[YAW-LOCK] chưa gom được mẫu yaw nào trong APPROACH — giữ heading"
+            )
+
     def _desired_yaw(self):
-        """Liên tục bám theo góc Yaw thế giới đã lọc thông thấp (LPF)."""
-        aligning = (
-            self.align_yaw_to_tag
-            and self._filtered_tag_yaw_world is not None
-            and self.state in ("HORIZONTAL_APPROACH", "DESCEND_ABOVE_TARGET")
-        )
-        if not aligning:
+        """Trước khi CHỐT (pha đầu: START / HORIZONTAL_APPROACH / SEARCH): GIỮ heading
+        (_held_yaw) — KHÔNG căn yaw, đúng như align_yaw_to_tag=False.
+        Việc chốt chỉ xảy ra tại điểm APPROACH→DESCEND, nên yaw thực sự chỉ bắt đầu
+        động ở DESCEND. Sau khi chốt: luôn lệnh heading đã ĐÓNG BĂNG (hằng số), giữ
+        nguyên kể cả nếu tạm quay lại APPROACH — tránh giật yaw sát đất."""
+        if not (self.align_yaw_to_tag and self._yaw_locked
+                and self._tag_yaw_abs is not None):
             return self._held_yaw
-        return self._filtered_tag_yaw_world
+        return self._tag_yaw_abs
 
     def _update_yaw(self):
         """Slew sp_yaw về heading mong muốn — tránh giật yaw."""
@@ -520,7 +554,6 @@ class OffboardPreclandController(Node):
         self._tag_yaw_abs = None
         self._yaw_locked = False
         self._yaw_lock_buf = []
-        self._filtered_tag_yaw_world = None
         self._start_z_sp = float(self.pos_enu[2])
         self._approach_alt = float(self.pos_enu[2])
         self._search_cnt = 0
@@ -605,6 +638,7 @@ class OffboardPreclandController(Node):
         self._target_counter += 1
 
         if self._centered_count >= self.ALIGN_CONFIRM:
+            self._latch_yaw()   # chốt heading đích TRƯỚC khi vào DESCEND
             self._descent_z_sp = float(self.pos_enu[2])
             self._target_counter = 0
             self._centered_count = 0
@@ -615,6 +649,7 @@ class OffboardPreclandController(Node):
         if self._align_start and (self._now() - self._align_start) > self.ALIGN_TIMEOUT:
             dr = self._descent_r()
             if self.target_rel_norm <= dr:
+                self._latch_yaw()   # chốt heading đích TRƯỚC khi vào DESCEND
                 self._descent_z_sp = float(self.pos_enu[2])
                 self._target_counter = 0
                 self._transition("DESCEND_ABOVE_TARGET")
