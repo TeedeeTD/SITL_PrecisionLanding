@@ -23,7 +23,7 @@ from mavros_msgs.srv import CommandBool, SetMode, CommandLong, ParamGet, Waypoin
 
 class OffboardPreclandController(Node):
     # --- Configuration ---
-    CTRL_HZ = 30                # Tần số chạy vòng lặp điều khiển chính (Hz)
+    CTRL_HZ = 30           # Tần số chạy vòng lặp điều khiển chính (Hz)
     TARGET_TIMEOUT = 5.0       # Thời gian tối đa (s) không nhận được tag trước khi coi là mất mục tiêu
     TRACKING_CONFIRM = 10       # Số mẫu nhận tag liên tục để xác nhận đã bám mục tiêu trở lại
     ALIGN_CONFIRM = 6           # Số mẫu liên tục đạt sai số nhỏ hơn bán kính cho phép trước khi hạ cánh
@@ -37,7 +37,7 @@ class OffboardPreclandController(Node):
     MAX_ALIGN_STEP = 0.45       # Bước dịch chuyển ngang tối đa (m) mỗi chu kỳ trong pha căn ngang
     MAX_DESCENT_STEP = 0.35     # Bước dịch chuyển ngang tối đa (m) mỗi chu kỳ trong pha hạ cánh
     SERVO_GAIN_HIGH = 0.35      # Hệ số bám ngang (Visual Servo Gain) ở độ cao lớn (tương ứng HIGH_ALT)
-    SERVO_GAIN_LOW = 0.8   # Hệ số bám ngang (Visual Servo Gain) ở độ cao thấp (tương ứng LOW_ALT)
+    SERVO_GAIN_LOW = 0.75        # Hệ số bám ngang (Visual Servo Gain) ở độ cao thấp (tương ứng LOW_ALT)
 
     # --- PX4 Dynamic Descent Parameters ---
     MPC_LAND_ALT1 = 12.0        # Độ cao bắt đầu pha 1 (m) - giảm tốc độ từ max descent velocity xuống land speed
@@ -50,7 +50,7 @@ class OffboardPreclandController(Node):
     LOW_ALT = 5.0               # Ngưỡng độ cao tối đa áp dụng độ nhạy căn ngang lớn nhất (m)
     ALPHA_HIGH = 0.18           # Hệ số lọc thông thấp cho vị trí mục tiêu ở độ cao lớn (mượt hơn)
     ALPHA_LOW = 0.45            # Hệ số lọc thông thấp cho vị trí mục tiêu ở độ cao thấp (nhanh hơn)
-    FILTER_WINDOW = 7           # Kích thước bộ lọc trung vị/trung bình trượt cho tọa độ mục tiêu
+    FILTER_WINDOW = 5       # Kích thước bộ lọc trung vị/trung bình trượt cho tọa độ mục tiêu
 
     # --- Sai số ngang cho phép (Dynamic Gates) ---
     # align_r = ALIGN_R_BIAS + ALIGN_R_GAIN * alt (giới hạn trong khoảng [MIN, MAX])
@@ -63,7 +63,7 @@ class OffboardPreclandController(Node):
     DESC_R_MIN = 0.1         # Bán kính hạ cánh tối thiểu cho phép (m) (nếu vượt quá sẽ khóa Z)
     DESC_R_MAX = 2.0           # Bán kính hạ cánh tối đa cho phép (m) (nếu vượt quá sẽ khóa Z)
     DESC_R_GAIN = 0.25          # Hệ số tăng bán kính hạ cánh theo độ cao
-    DESC_R_BIAS = 0.20          # Hằng số dịch chuyển bán kính hạ cánh
+    DESC_R_BIAS = 0.08         # Hằng số dịch chuyển bán kính hạ cánh
 
     # reject_r = REJECT_R_MIN + REJECT_R_GAIN * alt (giới hạn trong khoảng [MIN, MAX])
     REJECT_R_MIN = 1.0          # Bán kính tối thiểu (m) lọc bỏ nhiễu tag nhảy vọt đột ngột
@@ -74,7 +74,7 @@ class OffboardPreclandController(Node):
     TARGET_LOSS_GRACE = 1.5     # Thời gian ân hạn (s) cho phép mất dấu tag trước khi báo TARGET_LOST
     DESCENT_LOSS_HOLD = 3.0     # Thời gian (s) giữ nguyên setpoint khi mất dấu tag ở pha hạ cánh
     ABORT_ALT = 0.5        # MAVLink Param 1: Độ cao tối thiểu để hủy hạ cánh và thực hiện go-around (m)
-    LOW_ALT_MAX_ERR = 0.25      # Sai số XY tối đa cho phép ở độ cao thấp dưới 1m (m)
+    LOW_ALT_MAX_ERR = 0.15    # Sai số XY tối đa cho phép ở độ cao thấp dưới 1m (m)
     SEARCH_ALT = 10.0           # Độ cao tìm/bắt tag mặc định (m)
     SEARCH_ALT_MAX = 11.0       # Độ cao tìm/bắt tag tối đa cho phép (m)
 
@@ -85,7 +85,7 @@ class OffboardPreclandController(Node):
 
     # --- Điều khiển Yaw ---
     YAW_SLEW_RATE = 0.6         # Tốc độ xoay hướng (yaw) tối đa của drone (rad/s)
-    YAW_LOCK_SAMPLES = 50   # Số mẫu yaw gom tại độ cao khóa để tính trung bình trước khi chốt
+    YAW_LOCK_SAMPLES = 30 # Số mẫu yaw gom tại độ cao khóa để tính trung bình trước khi chốt
     YAW_LOCK_ALT = 7.0          # Độ cao (m) dừng lại khóa yaw lần 1 (khóa thô)
     YAW_LOCK_ALT_2 = 3.0        # Độ cao (m) dừng lại khóa yaw lần 2 (khóa tinh chỉnh)
 
