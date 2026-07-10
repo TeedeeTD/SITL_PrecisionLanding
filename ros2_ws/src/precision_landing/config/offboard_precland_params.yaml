@@ -1,0 +1,76 @@
+offboard_precland_controller:
+  ros__parameters:
+    # --- Physical Configs ---
+    camera_x_to_body_east_sign: 1.0
+    camera_y_to_body_north_sign: -1.0
+    camera_yaw_frame: "body"
+    camera_offset_x: 0.157
+    camera_offset_y: 0.0
+    marker_size: 0.50
+
+    # --- Topics ---
+    target_topic: "/landing/target_camera"
+    target_pose_topic: "/aruco_fractal_tracker/poses"
+
+    # --- Yaw Control ---
+    align_yaw_to_tag: true
+    tag_yaw_sign: 1.0
+    tag_yaw_offset: 0.0
+    yaw_slew_rate: 0.6
+    yaw_lock_samples: 30
+    yaw_lock_alt: 7.0
+    yaw_lock_alt_2: 3.0
+
+    # --- Mode / Limits ---
+    land_mode: 2
+    abort_alt: 0.3
+    final_alt: 0.1
+
+    # --- FSM Configuration Constants ---
+    ctrl_hz: 30
+    target_timeout: 5.0
+    tracking_confirm: 10
+    align_confirm: 6
+    align_timeout: 10.0
+    search_timeout: 10.0
+    max_search: 3
+    descent_rate: 0.70
+    fappr_alt: 0.5
+    hacc_rad: 0.20
+    max_align_step: 0.45
+    max_descent_step: 0.35
+    servo_gain_high: 0.35
+    servo_gain_low: 0.75
+
+    # --- PX4 Dynamic Descent Parameters ---
+    mpc_land_alt1: 12.0
+    mpc_land_alt2: 7.0
+    mpc_land_alt_crawl: 2.0
+    mpc_z_vel_max_dn: 1.5
+    mpc_land_speed: 0.7
+    mpc_land_crwl: 0.2
+    high_alt: 8.0
+    low_alt: 5.0
+    alpha_high: 0.18
+    alpha_low: 0.45
+    filter_window: 5
+
+    # --- Dynamic Gates ---
+    align_r_min: 0.25
+    align_r_max: 4.0
+    align_r_gain: 0.20
+    align_r_bias: 0.15
+    desc_r_min: 0.1
+    desc_r_max: 2.0
+    desc_r_gain: 0.12
+    desc_r_bias: 0.08
+    reject_r_min: 1.0
+    reject_r_max: 5.0
+    reject_r_gain: 0.50
+
+    # --- Losses and Hold ---
+    target_loss_grace: 1.5
+    descent_loss_hold: 3.0
+    low_alt_max_err: 0.1
+    search_alt: 10.0
+    search_alt_max: 11.0

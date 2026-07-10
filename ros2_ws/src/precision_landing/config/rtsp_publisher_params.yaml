@@ -1,0 +1,13 @@
+siyi_rtsp_publisher:
+  ros__parameters:
+    rtsp_url: "rtsp://192.168.168.14:8554/main.264"
+    frame_id: "siyi_camera_optical_frame"
+    flip_180: true
+    target_fps: 30.0
+    image_width: 1280
+    image_height: 720
+    camera_fx: 749.338
+    camera_fy: 749.338
+    camera_cx: 640.0
+    camera_cy: 360.0
+    camera_d: [0.0, 0.0, 0.0, 0.0, 0.0]
