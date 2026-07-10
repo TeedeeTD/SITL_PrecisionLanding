@@ -23,64 +23,89 @@ from mavros_msgs.srv import CommandBool, SetMode, CommandLong, ParamGet, Waypoin
 
 class OffboardPreclandController(Node):
     # --- Configuration ---
-    CTRL_HZ = 30
-    TARGET_TIMEOUT = 1.2
-    TRACKING_CONFIRM = 10
-    ALIGN_CONFIRM = 6
-    ALIGN_TIMEOUT = 18.0
-    SEARCH_TIMEOUT = 35.0
-    MAX_SEARCH = 3
-    DESCENT_RATE = 0.45
-    FINAL_ALT = 0.30
-    FAPPR_ALT = 0.5
-    HACC_RAD = 0.20
-    MAX_ALIGN_STEP = 0.45
-    MAX_DESCENT_STEP = 0.35
-    SERVO_GAIN_HIGH = 0.35
-    SERVO_GAIN_LOW = 0.75
-    HIGH_ALT = 8.0
-    LOW_ALT = 5.0
-    ALPHA_HIGH = 0.18
-    ALPHA_LOW = 0.45
-    FILTER_WINDOW = 7
-    ALIGN_R_MIN = 1.2
-    ALIGN_R_MAX = 4.0
-    ALIGN_R_GAIN = 0.20
-    ALIGN_R_BIAS = 0.15
-    DESC_R_MIN = 1.5
-    DESC_R_MAX = 5.0
-    DESC_R_GAIN = 0.25
-    DESC_R_BIAS = 0.20
-    REJECT_R_MIN = 1.0
-    REJECT_R_MAX = 5.0
-    REJECT_R_GAIN = 0.50
-    TARGET_LOSS_GRACE = 1.5
-    DESCENT_LOSS_HOLD = 3.0
-    LOW_ALT_COMMIT = 1.0
-    LOW_ALT_MAX_ERR = 0.25
-    SEARCH_ALT = 10.0          # Độ cao tìm/bắt tag (tag chỉ detect được ≤ ~11m)
-    SEARCH_ALT_MAX = 11.0      # Cap cứng — không bao giờ leo cao hơn mức này khi search
-    YAW_SLEW_RATE = 0.6        # rad/s — slew heading nhẹ sau khi đã khóa tag
-    YAW_LOCK_SAMPLES = 15      # số mẫu yaw gom TẠI YAW_LOCK_ALT trước khi đóng băng heading
-    YAW_LOCK_ALT = 7.0         # độ cao (m) dừng lại lấy mẫu yaw rồi đóng băng
-    YAW_LOCK_ALT_2 = 3.0       # độ cao (m) dừng lại khóa yaw lần 2 (chính xác hơn)
+    CTRL_HZ = 30                # Tần số chạy vòng lặp điều khiển chính (Hz)
+    TARGET_TIMEOUT = 5.0       # Thời gian tối đa (s) không nhận được tag trước khi coi là mất mục tiêu
+    TRACKING_CONFIRM = 10       # Số mẫu nhận tag liên tục để xác nhận đã bám mục tiêu trở lại
+    ALIGN_CONFIRM = 6           # Số mẫu liên tục đạt sai số nhỏ hơn bán kính cho phép trước khi hạ cánh
+    ALIGN_TIMEOUT = 18.0        # Thời gian chờ tối đa (s) cho pha căn chỉnh ngang
+    SEARCH_TIMEOUT = 35.0       # Thời gian chờ tối đa (s) để tìm kiếm tag trong trạng thái SEARCH
+    MAX_SEARCH = 3              # Số lần thử tìm kiếm tối đa trước khi hủy hạ cánh chính xác
+    DESCENT_RATE = 0.70         # Tốc độ hạ cánh tiêu chuẩn danh nghĩa (m/s)
+    FINAL_ALT = 0.1         # Độ cao cuối cùng (m) để chuyển quyền kiểm soát sang AUTO.LAND
+    FAPPR_ALT = 0.5             # Độ cao tiếp cận giai đoạn cuối (m)
+    HACC_RAD = 0.20             # Bán kính vùng căn chỉnh ngang cực thấp (m)
+    MAX_ALIGN_STEP = 0.45       # Bước dịch chuyển ngang tối đa (m) mỗi chu kỳ trong pha căn ngang
+    MAX_DESCENT_STEP = 0.35     # Bước dịch chuyển ngang tối đa (m) mỗi chu kỳ trong pha hạ cánh
+    SERVO_GAIN_HIGH = 0.35      # Hệ số bám ngang (Visual Servo Gain) ở độ cao lớn (tương ứng HIGH_ALT)
+    SERVO_GAIN_LOW = 0.8   # Hệ số bám ngang (Visual Servo Gain) ở độ cao thấp (tương ứng LOW_ALT)
+
+    # --- PX4 Dynamic Descent Parameters ---
+    MPC_LAND_ALT1 = 12.0        # Độ cao bắt đầu pha 1 (m) - giảm tốc độ từ max descent velocity xuống land speed
+    MPC_LAND_ALT2 = 7.0         # Độ cao bắt đầu pha 2 (m) - giữ tốc độ hạ ổn định ở mức tiêu chuẩn
+    MPC_LAND_ALT_CRAWL = 2.0    # Độ cao bắt đầu pha 3 (Crawl) (m) - bò sát đất (Lưu ý: 20 có thể là gõ nhầm của 2.0 hoặc 1.0)
+    MPC_Z_VEL_MAX_DN = 1.5      # Tốc độ hạ tối đa ở độ cao lớn (Pha 0) (m/s)
+    MPC_LAND_SPEED = 0.7        # Tốc độ hạ tiêu chuẩn ở độ cao trung bình (Pha 1) (m/s)
+    MPC_LAND_CRWL = 0.2         # Tốc độ bò hạ cánh sát đất (Pha 3) (m/s)
+    HIGH_ALT = 8.0              # Ngưỡng độ cao bắt đầu giảm dần độ nhạy căn ngang (m)
+    LOW_ALT = 5.0               # Ngưỡng độ cao tối đa áp dụng độ nhạy căn ngang lớn nhất (m)
+    ALPHA_HIGH = 0.18           # Hệ số lọc thông thấp cho vị trí mục tiêu ở độ cao lớn (mượt hơn)
+    ALPHA_LOW = 0.45            # Hệ số lọc thông thấp cho vị trí mục tiêu ở độ cao thấp (nhanh hơn)
+    FILTER_WINDOW = 7           # Kích thước bộ lọc trung vị/trung bình trượt cho tọa độ mục tiêu
+
+    # --- Sai số ngang cho phép (Dynamic Gates) ---
+    # align_r = ALIGN_R_BIAS + ALIGN_R_GAIN * alt (giới hạn trong khoảng [MIN, MAX])
+    ALIGN_R_MIN = 0.25      # Bán kính căn chỉnh ngang tối thiểu cho phép (m)
+    ALIGN_R_MAX = 4.0           # Bán kính căn chỉnh ngang tối đa cho phép (m)
+    ALIGN_R_GAIN = 0.20         # Hệ số tăng bán kính căn chỉnh theo độ cao
+    ALIGN_R_BIAS = 0.15         # Hằng số dịch chuyển bán kính căn chỉnh
+
+    # descent_r = DESC_R_BIAS + DESC_R_GAIN * alt (giới hạn trong khoảng [MIN, MAX])
+    DESC_R_MIN = 0.1         # Bán kính hạ cánh tối thiểu cho phép (m) (nếu vượt quá sẽ khóa Z)
+    DESC_R_MAX = 2.0           # Bán kính hạ cánh tối đa cho phép (m) (nếu vượt quá sẽ khóa Z)
+    DESC_R_GAIN = 0.25          # Hệ số tăng bán kính hạ cánh theo độ cao
+    DESC_R_BIAS = 0.20          # Hằng số dịch chuyển bán kính hạ cánh
+
+    # reject_r = REJECT_R_MIN + REJECT_R_GAIN * alt (giới hạn trong khoảng [MIN, MAX])
+    REJECT_R_MIN = 1.0          # Bán kính tối thiểu (m) lọc bỏ nhiễu tag nhảy vọt đột ngột
+    REJECT_R_MAX = 5.0          # Bán kính tối đa (m) lọc bỏ nhiễu tag nhảy vọt đột ngột
+    REJECT_R_GAIN = 0.50        # Hệ số tăng bán kính lọc theo độ cao
+
+    # --- Trôi dạt và Mất dấu ---
+    TARGET_LOSS_GRACE = 1.5     # Thời gian ân hạn (s) cho phép mất dấu tag trước khi báo TARGET_LOST
+    DESCENT_LOSS_HOLD = 3.0     # Thời gian (s) giữ nguyên setpoint khi mất dấu tag ở pha hạ cánh
+    ABORT_ALT = 0.5        # MAVLink Param 1: Độ cao tối thiểu để hủy hạ cánh và thực hiện go-around (m)
+    LOW_ALT_MAX_ERR = 0.25      # Sai số XY tối đa cho phép ở độ cao thấp dưới 1m (m)
+    SEARCH_ALT = 10.0           # Độ cao tìm/bắt tag mặc định (m)
+    SEARCH_ALT_MAX = 11.0       # Độ cao tìm/bắt tag tối đa cho phép (m)
+
+    # --- Cấu hình vật lý Camera & Target ---
+    CAMERA_OFFSET_X = 0.181   # Khoảng cách lệch vật lý (m) từ trọng tâm drone đến camera theo trục tiến (X)
+    CAMERA_OFFSET_Y = 0.0       # Khoảng cách lệch vật lý (m) từ trọng tâm drone đến camera theo trục ngang (Y)
+    MARKER_SIZE = 0.50          # Kích thước cạnh thực tế của tấm tag ArUco (m) (ví dụ: 0.5m = 50cm)
+
+    # --- Điều khiển Yaw ---
+    YAW_SLEW_RATE = 0.6         # Tốc độ xoay hướng (yaw) tối đa của drone (rad/s)
+    YAW_LOCK_SAMPLES = 50   # Số mẫu yaw gom tại độ cao khóa để tính trung bình trước khi chốt
+    YAW_LOCK_ALT = 7.0          # Độ cao (m) dừng lại khóa yaw lần 1 (khóa thô)
+    YAW_LOCK_ALT_2 = 3.0        # Độ cao (m) dừng lại khóa yaw lần 2 (khóa tinh chỉnh)
 
     def __init__(self) -> None:
         super().__init__("offboard_precland_controller")
 
-        self.declare_parameter("camera_x_to_body_east_sign", 1.0)
-        self.declare_parameter("camera_y_to_body_north_sign", -1.0)
-        self.declare_parameter("camera_yaw_frame", "body")
-        self.declare_parameter("camera_offset_x", 0.1517)
-        self.declare_parameter("camera_offset_y", 0.0)
-        self.declare_parameter("marker_size", 0.50)
+        self.declare_parameter("camera_x_to_body_east_sign", 1.0) # Hệ số đổi chiều/đồng bộ trục X camera sang trục East của drone (1.0 = cùng chiều, -1.0 = ngược chiều)
+        self.declare_parameter("camera_y_to_body_north_sign", -1.0) # Hệ số đổi chiều/đồng bộ trục Y camera sang trục North của drone (1.0 = cùng chiều, -1.0 = ngược chiều)
+        self.declare_parameter("camera_yaw_frame", "body")        # Khung tham chiếu hướng (Yaw) của camera ("body" = xoay theo drone, "local" = cố định theo map thế giới)
+        self.declare_parameter("camera_offset_x", self.CAMERA_OFFSET_X)         # Khoảng cách lệch vật lý (m) từ trọng tâm drone đến camera theo trục tiến (X)
+        self.declare_parameter("camera_offset_y", self.CAMERA_OFFSET_Y)            # Khoảng cách lệch vật lý (m) từ trọng tâm drone đến camera theo trục ngang (Y)
+        self.declare_parameter("marker_size", self.MARKER_SIZE)               # Kích thước cạnh thực tế của tấm tag ArUco (m) (ví dụ: 0.5m = 50cm)
         self.declare_parameter("target_topic", "/landing/target_camera")
         self.declare_parameter("target_pose_topic", "/aruco_fractal_tracker/poses")
         self.declare_parameter("align_yaw_to_tag", False)  # TẮT mặc định — ArUco solvePnP yaw không tin cậy
         self.declare_parameter("tag_yaw_sign", 1.0)        # lật dấu nếu xoay ngược chiều
         self.declare_parameter("tag_yaw_offset", 0.0)      # bù offset khung camera→body (rad), calib 1 lần
-        self.declare_parameter("precland_mode", 2)          # 0=disabled, 1=opportunistic, 2=required
-        self.declare_parameter("final_alt", 0.18)           # Độ cao bàn giao quyền lại cho PX4 (m)
+        self.declare_parameter("land_mode", 2)             # MAVLink Param 2: 0=disabled, 1=opportunistic, 2=required
+        self.declare_parameter("abort_alt", self.ABORT_ALT) # MAVLink Param 1: Độ cao tối thiểu để hủy hạ cánh và thực hiện go-around (m)
+        self.declare_parameter("final_alt", self.FINAL_ALT)           # Độ cao bàn giao quyền lại cho PX4 (m)
 
         self.cam_east_sign = self.get_parameter("camera_x_to_body_east_sign").value
         self.cam_north_sign = self.get_parameter("camera_y_to_body_north_sign").value
@@ -93,7 +118,8 @@ class OffboardPreclandController(Node):
         self.align_yaw_to_tag = bool(self.get_parameter("align_yaw_to_tag").value)
         self.tag_yaw_sign = float(self.get_parameter("tag_yaw_sign").value)
         self.tag_yaw_offset = float(self.get_parameter("tag_yaw_offset").value)
-        self.precland_mode = int(self.get_parameter("precland_mode").value)
+        self.land_mode = int(self.get_parameter("land_mode").value)
+        self.ABORT_ALT = float(self.get_parameter("abort_alt").value)
         self.FINAL_ALT = float(self.get_parameter("final_alt").value)
 
         # State
@@ -353,6 +379,21 @@ class OffboardPreclandController(Node):
             return self._tag_yaw_abs
         return self._held_yaw
 
+    def _current_descent_rate(self) -> float:
+        """Tính toán tốc độ hạ cánh động theo độ cao thực tế (z) dựa trên các thông số PX4."""
+        z = self.pos_enu[2]
+        if z > self.MPC_LAND_ALT1:
+            return self.MPC_Z_VEL_MAX_DN
+        elif z > self.MPC_LAND_ALT2:
+            return self.MPC_LAND_SPEED
+        elif z > self.MPC_LAND_ALT_CRAWL:
+            # Pha 2: Giảm tuyến tính từ MPC_LAND_SPEED xuống MPC_LAND_CRWL
+            span = self.MPC_LAND_ALT2 - self.MPC_LAND_ALT_CRAWL
+            t = (z - self.MPC_LAND_ALT_CRAWL) / span
+            return self.MPC_LAND_CRWL + (self.MPC_LAND_SPEED - self.MPC_LAND_CRWL) * t
+        else:
+            return self.MPC_LAND_CRWL
+
     def _update_yaw(self):
         """Slew sp_yaw về heading mong muốn — tránh giật yaw."""
         desired = self._desired_yaw()
@@ -456,9 +497,9 @@ class OffboardPreclandController(Node):
             if res.success:
                 val = int(res.value.integer)
                 if val in (0, 1, 2):
-                    if self.precland_mode != val:
-                        self.get_logger().info(f"Automatically synced PX4 RTL_PLD_MD param: {self.precland_mode} -> {val}")
-                        self.precland_mode = val
+                    if self.land_mode != val:
+                        self.get_logger().info(f"Automatically synced PX4 RTL_PLD_MD param: {self.land_mode} -> {val}")
+                        self.land_mode = val
         except Exception as exc:
             self.get_logger().warn(f"Failed to query PX4 parameter RTL_PLD_MD: {exc}", throttle_duration_sec=10.0)
 
@@ -531,12 +572,12 @@ class OffboardPreclandController(Node):
     # ── FSM States ────────────────────────────────────────────
 
     def _st_idle(self):
-        """Monitor for AUTO.LAND — chỉ can thiệp khi precland_mode > 0."""
+        """Monitor for AUTO.LAND — chỉ can thiệp khi land_mode > 0."""
         if not (self.is_landing and self.armed):
             return
 
         # Tự động phát hiện chế độ precision landing cho điểm hạ cánh hiện tại trong bài bay (mission)
-        active_mode = self.precland_mode
+        active_mode = self.land_mode
         land_wp = None
         # Kiểm tra cả waypoint hiện tại và waypoint tiếp theo (tránh trễ đồng bộ active seq từ PX4)
         for idx in (self._current_wp_seq, self._current_wp_seq + 1):
@@ -556,7 +597,7 @@ class OffboardPreclandController(Node):
             return  # Precision landing disabled cho lần hạ cánh này — KHÔNG can thiệp
 
         # Ghi nhận chế độ hoạt động cho lượt hạ cánh này
-        self.precland_mode = active_mode
+        self.land_mode = active_mode
 
         # Cả mode 1 (opportunistic) và mode 2 (required) đều tự động chiếm quyền OFFBOARD khi bắt đầu land.
         # Sự khác biệt sẽ nằm ở việc xử lý khi không tìm thấy tag ở độ cao detect (10m).
@@ -585,7 +626,7 @@ class OffboardPreclandController(Node):
         # vào tầm nhìn — thay vì hover ở độ cao mission nơi không thể thấy tag.
         hold = self._land_hold_pos if self._land_hold_pos is not None else self.pos_enu
         target_z = min(float(hold[2]), self.SEARCH_ALT)
-        self._start_z_sp = max(target_z, self._start_z_sp - self.DESCENT_RATE / self.CTRL_HZ)
+        self._start_z_sp = max(target_z, self._start_z_sp - self._current_descent_rate() / self.CTRL_HZ)
         self.sp_enu = np.array([hold[0], hold[1], self._start_z_sp])
 
         if not self._offboard_activated:
@@ -618,7 +659,7 @@ class OffboardPreclandController(Node):
 
             elapsed = self._now() - self._search_start
             if elapsed > 5.0:
-                if self.precland_mode == 1:
+                if self.land_mode == 1:
                     self.get_logger().warn("Opportunistic mode: Target not found at search altitude → FALLBACK (normal landing)")
                     self._transition("FALLBACK")
                 else:
@@ -682,7 +723,7 @@ class OffboardPreclandController(Node):
         descent_ok = self.target_rel_norm <= dr
 
         # Low-altitude commit check
-        if self.pos_enu[2] < self.LOW_ALT_COMMIT and not descent_ok:
+        if self.pos_enu[2] < self.ABORT_ALT and not descent_ok:
             age = self._now() - self.last_pose_time
             if age <= 0.5 and self.target_rel_norm <= self.LOW_ALT_MAX_ERR:
                 self.get_logger().warn("Low-alt guarded commit → FINAL_APPROACH")
@@ -698,8 +739,8 @@ class OffboardPreclandController(Node):
                 self._yaw_realign_complete = False
                 self._realign_cnt = 0
                 self.get_logger().info("Entering Stage 1 Yaw Lock at 7m")
-            elif (self._yaw_lock_stage == 1 
-                  and self._yaw_realign_complete 
+            elif (self._yaw_lock_stage == 1
+                  and self._yaw_realign_complete
                   and self.pos_enu[2] <= self.YAW_LOCK_ALT_2):
                 self._yaw_lock_stage = 2
                 self._yaw_locked = False
@@ -709,14 +750,14 @@ class OffboardPreclandController(Node):
                 self.get_logger().info("Entering Stage 2 Yaw Lock at 3m")
 
         # Kiểm tra xem có đang ở trong pha hover khóa yaw / căn chỉnh lại của stage 1 hoặc stage 2 không
-        in_lock_hover = (self.align_yaw_to_tag 
-                         and not self._yaw_realign_complete 
+        in_lock_hover = (self.align_yaw_to_tag
+                         and not self._yaw_realign_complete
                          and self._yaw_lock_stage in (1, 2))
 
         # Căn chỉnh XY mọi lúc, trừ lúc đang xoay Yaw (chênh lệch yaw > 3 độ)
         current_yaw = self._yaw(self.q_att)
         yaw_err = abs(self._wrap(self.sp_yaw - current_yaw))
-        rotating = (self.align_yaw_to_tag and self._yaw_locked 
+        rotating = (self.align_yaw_to_tag and self._yaw_locked
                     and yaw_err > math.radians(3.0))
 
         if in_lock_hover:
@@ -756,7 +797,7 @@ class OffboardPreclandController(Node):
                 self._descent_drift_count = 0
                 self._descent_z_sp = max(
                     self.FINAL_ALT,
-                    self._descent_z_sp - self.DESCENT_RATE / self.CTRL_HZ,
+                    self._descent_z_sp - self._current_descent_rate() / self.CTRL_HZ,
                 )
             else:
                 # Z-LOCK: freeze altitude when drifting
@@ -767,7 +808,7 @@ class OffboardPreclandController(Node):
                         f"DESCENT Z-LOCK: err={self.target_rel_norm:.2f} > gate={dr:.2f}"
                     )
                 if self._descent_drift_count >= self.ALIGN_CONFIRM:
-                    if self.pos_enu[2] > self.LOW_ALT_COMMIT:
+                    if self.pos_enu[2] > self.ABORT_ALT:
                         self._search_start = self._now()
                         self._transition("SEARCH")
                     else:
@@ -787,7 +828,7 @@ class OffboardPreclandController(Node):
             phase = "descending" if descent_ok else "z-locked"
             self.get_logger().info(
                 f"DESCEND ({phase}): alt={self._alt():.2f} z_sp={self._descent_z_sp:.2f} "
-                f"err={self.target_rel_norm:.2f} gate={dr:.2f}"
+                f"rate={self._current_descent_rate():.2f}m/s err={self.target_rel_norm:.2f} gate={dr:.2f}"
             )
         self._target_counter += 1
 
@@ -850,7 +891,7 @@ class OffboardPreclandController(Node):
         self.sp_enu = self.pos_enu.copy()
 
         if elapsed > self.TARGET_LOSS_GRACE:
-            if self.pos_enu[2] > self.LOW_ALT_COMMIT:
+            if self.pos_enu[2] > self.ABORT_ALT:
                 self._search_start = self._now()
                 self._transition("SEARCH")
             else:
