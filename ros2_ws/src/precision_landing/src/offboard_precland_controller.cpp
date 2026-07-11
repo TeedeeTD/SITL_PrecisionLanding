@@ -332,7 +332,7 @@ void OffboardPreclandController::on_target(const geometry_msgs::msg::PoseStamped
     msg_map = tf_buffer_->transform(msg_zero_time, "map", tf2::durationFromSec(0.05));
     abs_x = msg_map.pose.position.x;
     abs_y = msg_map.pose.position.y;
-    
+
     Quaternion q_tag_world{
       msg_map.pose.orientation.w,
       msg_map.pose.orientation.x,
@@ -343,7 +343,7 @@ void OffboardPreclandController::on_target(const geometry_msgs::msg::PoseStamped
     tf_ok = true;
   } catch (const tf2::TransformException & ex) {
     RCLCPP_WARN(this->get_logger(), "TF2 Transform to map failed: %s. Using manual fallback.", ex.what());
-    
+
     double tvec_x = msg->pose.position.x;
     double tvec_y = msg->pose.position.y;
     double cam_x = camera_x_to_body_east_sign_ * tvec_x;
@@ -443,7 +443,7 @@ void OffboardPreclandController::set_mode(const std::string & mode)
   if (set_mode_client_->service_is_ready()) {
     auto req = std::make_shared<mavros_msgs::srv::SetMode::Request>();
     req->custom_mode = mode;
-    
+
     std::weak_ptr<OffboardPreclandController> weak_this = std::static_pointer_cast<OffboardPreclandController>(shared_from_this());
     auto cb = [weak_this, mode](rclcpp::Client<mavros_msgs::srv::SetMode>::SharedFuture future) {
       auto node = weak_this.lock();
@@ -838,7 +838,7 @@ void OffboardPreclandController::transition(PrecLandState new_state)
 
   PrecLandState old = state_;
   state_ = new_state;
-  
+
   RCLCPP_INFO(this->get_logger(), "FSM: %s → %s", to_string(old), to_string(new_state));
 
   if (new_state == PrecLandState::IDLE || new_state == PrecLandState::START) {
@@ -938,7 +938,7 @@ void OffboardPreclandController::control_loop()
     double target_x = std::get<0>(target_enu_.value());
     double target_y = std::get<1>(target_enu_.value());
     double dt = 1.0 / ctrl_hz_;
-    
+
     if (!target_enu_filtered_.has_value()) {
       sp_prev_ = Vector3{target_x, target_y, 0.0};
       sp_prev_vel_ = Vector3{0.0, 0.0, 0.0};
@@ -955,7 +955,7 @@ void OffboardPreclandController::control_loop()
 
   update_yaw();
 
-  if (state_ != PrecLandState::IDLE && state_ != PrecLandState::DONE && 
+  if (state_ != PrecLandState::IDLE && state_ != PrecLandState::DONE &&
       state_ != PrecLandState::FALLBACK && state_ != PrecLandState::FINAL_APPROACH) {
 
     geometry_msgs::msg::PoseStamped msg;
@@ -1220,13 +1220,13 @@ void OffboardPreclandController::st_descend_above_target()
       if (yaw_lock_buf_.size() >= static_cast<size_t>(yaw_lock_min_samples_)) {
         tag_yaw_abs_ = compute_locked_yaw(yaw_lock_buf_);
         yaw_locked_ = true;
-        RCLCPP_WARN(this->get_logger(), 
+        RCLCPP_WARN(this->get_logger(),
           "[YAW-TIMEOUT] Stage %d timed out (%.1fs). Using circular mean of %zu samples: sp_yaw=%.1f deg",
           yaw_lock_stage_, elapsed_hover, yaw_lock_buf_.size(), tag_yaw_abs_.value() * 180.0 / M_PI
         );
       } else {
         yaw_realign_complete_ = true; // skip yaw lock stage, move on
-        RCLCPP_WARN(this->get_logger(), 
+        RCLCPP_WARN(this->get_logger(),
           "[YAW-TIMEOUT] Stage %d timed out (%.1fs) with insufficient samples (%zu/%d). Skipping yaw realign.",
           yaw_lock_stage_, elapsed_hover, yaw_lock_buf_.size(), yaw_lock_min_samples_
         );
@@ -1311,7 +1311,7 @@ void OffboardPreclandController::st_descend_above_target()
 
   if (pos_enu_.z <= final_alt_param_ + 0.05 ||
       landed_state_ == mavros_msgs::msg::ExtendedState::LANDED_STATE_ON_GROUND) {
-    RCLCPP_INFO(this->get_logger(), "Final altitude or ground contact reached (alt=%.2fm, landed=%d)", 
+    RCLCPP_INFO(this->get_logger(), "Final altitude or ground contact reached (alt=%.2fm, landed=%d)",
                 pos_enu_.z, landed_state_);
     transition(PrecLandState::FINAL_APPROACH);
   }
