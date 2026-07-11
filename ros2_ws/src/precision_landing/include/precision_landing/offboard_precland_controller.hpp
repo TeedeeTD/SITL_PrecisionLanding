@@ -13,11 +13,17 @@
 #include <mavros_msgs/msg/state.hpp>
 #include <mavros_msgs/msg/extended_state.hpp>
 #include <mavros_msgs/msg/waypoint_list.hpp>
+#include <mavros_msgs/msg/position_target.hpp>
 #include <mavros_msgs/srv/command_bool.hpp>
 #include <mavros_msgs/srv/set_mode.hpp>
 #include <mavros_msgs/srv/command_long.hpp>
 #include <mavros_msgs/srv/param_get.hpp>
 #include <mavros_msgs/srv/waypoint_pull.hpp>
+#include <tf2_ros/transform_listener.h>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/static_transform_broadcaster.h>
+#include <tf2_ros/transform_broadcaster.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 namespace precision_landing
 {
@@ -86,6 +92,7 @@ private:
   void disarm();
   void pull_waypoints_immediately();
   void transition(PrecLandState new_state);
+  bool can_transition(PrecLandState from, PrecLandState to);
 
   // --- Math and Frame Helpers ---
   std::tuple<Vector3, Quaternion> get_historical_state(double time);
@@ -97,6 +104,9 @@ private:
   Vector3 camera_to_enu(double cam_x, double cam_y, const Quaternion & q_att);
   Vector3 calculate_visual_setpoint(double z_sp, double max_step);
   double current_descent_rate();
+  Vector3 apply_slew_rate(const Vector3 & target_sp, double dt);
+  void publish_static_transform(const std::string & camera_frame);
+  double compute_locked_yaw(const std::vector<double> & yaw_buf);
 
   // --- Dynamic Acceptance and Rejection Gates ---
   double get_alt();
@@ -115,6 +125,7 @@ private:
   std::string camera_yaw_frame_;
   double camera_offset_x_;
   double camera_offset_y_;
+  double camera_offset_z_;
   double marker_size_;
   std::string target_topic_;
   std::string target_pose_topic_;
@@ -175,6 +186,16 @@ private:
   double search_alt_;
   double search_alt_max_;
 
+  double final_approach_timeout_;
+  double final_descent_rate_;
+  double sp_vel_max_;
+  double sp_accel_max_;
+  double yaw_lock_timeout_;
+  int yaw_lock_min_samples_;
+  double camera_mount_roll_;
+  double camera_mount_pitch_;
+  double camera_mount_yaw_;
+
   // --- State Variables ---
   PrecLandState state_{PrecLandState::IDLE};
   Vector3 pos_enu_{0.0, 0.0, 0.0};
@@ -188,6 +209,13 @@ private:
   bool yaw_realign_complete_{false};
   int realign_cnt_{0};
   int yaw_lock_stage_{0};
+  double final_approach_start_{0.0};
+  double yaw_lock_stage_start_{0.0};
+  double last_loop_run_time_{0.0};
+  double final_x_{0.0};
+  double final_y_{0.0};
+  Vector3 sp_prev_{0.0, 0.0, 0.0};
+  Vector3 sp_prev_vel_{0.0, 0.0, 0.0};
 
   std::string current_mode_;
   uint8_t landed_state_{0};
@@ -198,6 +226,9 @@ private:
   // --- Target tracking ---
   std::deque<std::tuple<double, double>> target_samples_; // Queue for filtering
   std::optional<std::tuple<double, double>> target_enu_;
+  std::optional<std::tuple<double, double>> target_enu_filtered_;
+  double target_filt_vx_{0.0};
+  double target_filt_vy_{0.0};
   double target_rel_norm_{9999.0};
   double last_pose_time_{0.0};
   int tracking_count_{0};
@@ -223,7 +254,15 @@ private:
 
   // --- Publishers ---
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_sp_;
+  rclcpp::Publisher<mavros_msgs::msg::PositionTarget>::SharedPtr pub_sp_raw_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_state_;
+
+  // --- TF2 ---
+  std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
+  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+  std::shared_ptr<tf2_ros::StaticTransformBroadcaster> tf_static_broadcaster_;
+  std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+  bool tf_static_published_{false};
 
   // --- Subscribers ---
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_pos_;

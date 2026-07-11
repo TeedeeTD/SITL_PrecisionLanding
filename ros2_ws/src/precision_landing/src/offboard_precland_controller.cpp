@@ -15,6 +15,7 @@ OffboardPreclandController::OffboardPreclandController(const rclcpp::NodeOptions
   this->declare_parameter<std::string>("camera_yaw_frame");
   this->declare_parameter<double>("camera_offset_x");
   this->declare_parameter<double>("camera_offset_y");
+  this->declare_parameter<double>("camera_offset_z");
   this->declare_parameter<double>("marker_size");
   this->declare_parameter<std::string>("target_topic");
   this->declare_parameter<std::string>("target_pose_topic");
@@ -74,6 +75,15 @@ OffboardPreclandController::OffboardPreclandController(const rclcpp::NodeOptions
   this->declare_parameter<double>("low_alt_max_err");
   this->declare_parameter<double>("search_alt");
   this->declare_parameter<double>("search_alt_max");
+  this->declare_parameter<double>("final_approach_timeout");
+  this->declare_parameter<double>("final_descent_rate");
+  this->declare_parameter<double>("sp_vel_max");
+  this->declare_parameter<double>("sp_accel_max");
+  this->declare_parameter<double>("yaw_lock_timeout");
+  this->declare_parameter<int>("yaw_lock_min_samples");
+  this->declare_parameter<double>("camera_mount_roll");
+  this->declare_parameter<double>("camera_mount_pitch");
+  this->declare_parameter<double>("camera_mount_yaw");
 
   // --- Get Parameters ---
   camera_x_to_body_east_sign_ = this->get_parameter("camera_x_to_body_east_sign").as_double();
@@ -81,6 +91,7 @@ OffboardPreclandController::OffboardPreclandController(const rclcpp::NodeOptions
   camera_yaw_frame_ = this->get_parameter("camera_yaw_frame").as_string();
   camera_offset_x_ = this->get_parameter("camera_offset_x").as_double();
   camera_offset_y_ = this->get_parameter("camera_offset_y").as_double();
+  camera_offset_z_ = this->get_parameter("camera_offset_z").as_double();
   marker_size_ = this->get_parameter("marker_size").as_double();
   target_topic_ = this->get_parameter("target_topic").as_string();
   target_pose_topic_ = this->get_parameter("target_pose_topic").as_string();
@@ -139,6 +150,15 @@ OffboardPreclandController::OffboardPreclandController(const rclcpp::NodeOptions
   low_alt_max_err_ = this->get_parameter("low_alt_max_err").as_double();
   search_alt_ = this->get_parameter("search_alt").as_double();
   search_alt_max_ = this->get_parameter("search_alt_max").as_double();
+  final_approach_timeout_ = this->get_parameter("final_approach_timeout").as_double();
+  final_descent_rate_ = this->get_parameter("final_descent_rate").as_double();
+  sp_vel_max_ = this->get_parameter("sp_vel_max").as_double();
+  sp_accel_max_ = this->get_parameter("sp_accel_max").as_double();
+  yaw_lock_timeout_ = this->get_parameter("yaw_lock_timeout").as_double();
+  yaw_lock_min_samples_ = this->get_parameter("yaw_lock_min_samples").as_int();
+  camera_mount_roll_ = this->get_parameter("camera_mount_roll").as_double();
+  camera_mount_pitch_ = this->get_parameter("camera_mount_pitch").as_double();
+  camera_mount_yaw_ = this->get_parameter("camera_mount_yaw").as_double();
 
   // --- QoS Profiles ---
   rmw_qos_profile_t pose_qos_profile = rmw_qos_profile_default;
@@ -155,7 +175,14 @@ OffboardPreclandController::OffboardPreclandController(const rclcpp::NodeOptions
 
   // --- Publishers ---
   pub_sp_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("/mavros/setpoint_position/local", 10);
+  pub_sp_raw_ = this->create_publisher<mavros_msgs::msg::PositionTarget>("/mavros/setpoint_raw/local", 10);
   pub_state_ = this->create_publisher<std_msgs::msg::String>("/lander/state", 10);
+
+  // --- TF2 Initialize ---
+  tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
+  tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+  tf_static_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
+  tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
 
   // --- Subscribers ---
   sub_pos_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
@@ -223,6 +250,17 @@ void OffboardPreclandController::on_pos(const geometry_msgs::msg::PoseStamped::S
   q_att_.y = msg->pose.orientation.y;
   q_att_.z = msg->pose.orientation.z;
 
+  // Broadcast dynamic transform map -> base_link
+  geometry_msgs::msg::TransformStamped t;
+  t.header.stamp = msg->header.stamp;
+  t.header.frame_id = "map";
+  t.child_frame_id = "base_link";
+  t.transform.translation.x = msg->pose.position.x;
+  t.transform.translation.y = msg->pose.position.y;
+  t.transform.translation.z = msg->pose.position.z;
+  t.transform.rotation = msg->pose.orientation;
+  tf_broadcaster_->sendTransform(t);
+
   double stamp = msg->header.stamp.sec + msg->header.stamp.nanosec * 1e-9;
   history_.push_back({stamp, pos_enu_, q_att_});
   if (history_.size() > 150) {
@@ -279,30 +317,46 @@ void OffboardPreclandController::on_waypoints(const mavros_msgs::msg::WaypointLi
 void OffboardPreclandController::on_target(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
 {
   tracking_count_++;
-  double tvec_x = msg->pose.position.x;
-  double tvec_y = msg->pose.position.y;
-  double cam_x = camera_x_to_body_east_sign_ * tvec_x;
-  double cam_y = camera_y_to_body_north_sign_ * tvec_y;
+  publish_static_transform(msg->header.frame_id);
 
-  double t_time = msg->header.stamp.sec + msg->header.stamp.nanosec * 1e-9;
-  auto [h_pos, h_q] = get_historical_state(t_time);
-  Vector3 rel = camera_to_enu(cam_x, cam_y, h_q);
+  geometry_msgs::msg::PoseStamped msg_map;
+  bool tf_ok = false;
+  double world_yaw_sample = 0.0;
+  double abs_x = 0.0;
+  double abs_y = 0.0;
+  Quaternion h_q{1.0, 0.0, 0.0, 0.0};
 
-  double rn = std::sqrt(rel.x*rel.x + rel.y*rel.y);
-  double rr = get_reject_r();
-  if (rn > rr) {
-    tracking_count_ = 0;
-    return;
-  }
+  try {
+    geometry_msgs::msg::PoseStamped msg_zero_time = *msg;
+    msg_zero_time.header.stamp = rclcpp::Time(0);
+    msg_map = tf_buffer_->transform(msg_zero_time, "map", tf2::durationFromSec(0.05));
+    abs_x = msg_map.pose.position.x;
+    abs_y = msg_map.pose.position.y;
+    
+    Quaternion q_tag_world{
+      msg_map.pose.orientation.w,
+      msg_map.pose.orientation.x,
+      msg_map.pose.orientation.y,
+      msg_map.pose.orientation.z
+    };
+    world_yaw_sample = get_yaw(q_tag_world);
+    tf_ok = true;
+  } catch (const tf2::TransformException & ex) {
+    RCLCPP_WARN(this->get_logger(), "TF2 Transform to map failed: %s. Using manual fallback.", ex.what());
+    
+    double tvec_x = msg->pose.position.x;
+    double tvec_y = msg->pose.position.y;
+    double cam_x = camera_x_to_body_east_sign_ * tvec_x;
+    double cam_y = camera_y_to_body_north_sign_ * tvec_y;
 
-  double abs_x = h_pos.x + rel.x;
-  double abs_y = h_pos.y + rel.y;
+    double t_time = msg->header.stamp.sec + msg->header.stamp.nanosec * 1e-9;
+    Vector3 h_pos;
+    std::tie(h_pos, h_q) = get_historical_state(t_time);
+    Vector3 rel = camera_to_enu(cam_x, cam_y, h_q);
 
-  target_enu_ = {abs_x, abs_y};
-  target_rel_norm_ = std::sqrt((abs_x - pos_enu_.x)*(abs_x - pos_enu_.x) + (abs_y - pos_enu_.y)*(abs_y - pos_enu_.y));
-  last_pose_time_ = now_sec();
+    abs_x = h_pos.x + rel.x;
+    abs_y = h_pos.y + rel.y;
 
-  if (align_yaw_to_tag_) {
     Quaternion q_tag_cam{
       msg->pose.orientation.w,
       msg->pose.orientation.x,
@@ -311,18 +365,30 @@ void OffboardPreclandController::on_target(const geometry_msgs::msg::PoseStamped
     };
     Quaternion q_cam_body{0.0, 0.7071067811865475, -0.7071067811865475, 0.0};
     Quaternion q_tag_world = quaternion_multiply(quaternion_multiply(h_q, q_cam_body), q_tag_cam);
-    double world_yaw_sample = get_yaw(q_tag_world);
+    world_yaw_sample = get_yaw(q_tag_world);
+  }
 
-    if (tag_yaw_offset_ != 0.0) {
-      world_yaw_sample = wrap_angle(world_yaw_sample + tag_yaw_offset_);
-    }
+  // Calculate error relative to the drone's current pose
+  double rel_x = abs_x - pos_enu_.x;
+  double rel_y = abs_y - pos_enu_.y;
+  double rn = std::sqrt(rel_x*rel_x + rel_y*rel_y);
+  double rr = get_reject_r();
+  if (rn > rr) {
+    tracking_count_ = 0;
+    return;
+  }
 
+  target_enu_ = {abs_x, abs_y};
+  target_rel_norm_ = rn;
+  last_pose_time_ = now_sec();
+
+  if (align_yaw_to_tag_) {
     double target_lock_alt = (yaw_lock_stage_ <= 1) ? yaw_lock_alt_ : yaw_lock_alt_2_;
     if (state_ == PrecLandState::DESCEND_ABOVE_TARGET && !yaw_locked_ && pos_enu_.z <= target_lock_alt) {
       yaw_lock_buf_.push_back(world_yaw_sample);
       if (static_cast<int>(yaw_lock_buf_.size()) >= yaw_lock_samples_) {
         if (!yaw_lock_buf_.empty()) {
-          tag_yaw_abs_ = circular_mean(yaw_lock_buf_);
+          tag_yaw_abs_ = compute_locked_yaw(yaw_lock_buf_);
           yaw_locked_ = true;
           RCLCPP_INFO(
             this->get_logger(),
@@ -334,7 +400,7 @@ void OffboardPreclandController::on_target(const geometry_msgs::msg::PoseStamped
     }
 
     if (tracking_count_ % 15 == 0) {
-      double body_yaw = get_yaw(h_q);
+      double body_yaw = tf_ok ? get_yaw(q_att_) : get_yaw(h_q);
       RCLCPP_INFO(
         this->get_logger(),
         "[YAW-3D] alt=%.1fm stage=%d body=%.1f deg | sample=%.1f deg | locked=%s target=%.1f deg | buf=%d/%d | sp=%.1f deg",
@@ -352,7 +418,22 @@ void OffboardPreclandController::pull_waypoints_immediately()
 {
   if (wp_pull_client_->service_is_ready()) {
     auto req = std::make_shared<mavros_msgs::srv::WaypointPull::Request>();
-    wp_pull_client_->async_send_request(req);
+    std::weak_ptr<OffboardPreclandController> weak_this = std::static_pointer_cast<OffboardPreclandController>(shared_from_this());
+    auto cb = [weak_this](rclcpp::Client<mavros_msgs::srv::WaypointPull>::SharedFuture future) {
+      auto node = weak_this.lock();
+      if (!node) return;
+      try {
+        auto res = future.get();
+        if (res->success) {
+          RCLCPP_INFO(node->get_logger(), "Successfully pulled waypoints, received=%u", res->wp_received);
+        } else {
+          RCLCPP_WARN(node->get_logger(), "Waypoint pull failed");
+        }
+      } catch (const std::exception & e) {
+        RCLCPP_ERROR(node->get_logger(), "Waypoint pull service call failed: %s", e.what());
+      }
+    };
+    wp_pull_client_->async_send_request(req, cb);
     RCLCPP_INFO(this->get_logger(), "Landing phase started — pulling waypoints immediately");
   }
 }
@@ -362,7 +443,29 @@ void OffboardPreclandController::set_mode(const std::string & mode)
   if (set_mode_client_->service_is_ready()) {
     auto req = std::make_shared<mavros_msgs::srv::SetMode::Request>();
     req->custom_mode = mode;
-    set_mode_client_->async_send_request(req);
+    
+    std::weak_ptr<OffboardPreclandController> weak_this = std::static_pointer_cast<OffboardPreclandController>(shared_from_this());
+    auto cb = [weak_this, mode](rclcpp::Client<mavros_msgs::srv::SetMode>::SharedFuture future) {
+      auto node = weak_this.lock();
+      if (!node) return;
+      try {
+        auto res = future.get();
+        if (res->mode_sent) {
+          RCLCPP_INFO(node->get_logger(), "Set mode %s succeeded", mode.c_str());
+        } else {
+          RCLCPP_WARN(node->get_logger(), "Set mode %s failed (mode_sent = false)", mode.c_str());
+          if (mode == "OFFBOARD") {
+            node->offboard_activated_ = false; // allow retry
+          }
+        }
+      } catch (const std::exception & e) {
+        RCLCPP_ERROR(node->get_logger(), "Set mode %s service call failed: %s", mode.c_str(), e.what());
+        if (mode == "OFFBOARD") {
+          node->offboard_activated_ = false; // allow retry
+        }
+      }
+    };
+    set_mode_client_->async_send_request(req, cb);
   }
 }
 
@@ -397,21 +500,23 @@ void OffboardPreclandController::query_px4_params()
     auto req = std::make_shared<mavros_msgs::srv::ParamGet::Request>();
     req->param_id = "RTL_PLD_MD";
     using ServiceResponseFuture = rclcpp::Client<mavros_msgs::srv::ParamGet>::SharedFuture;
-    auto node_ptr = this;
-    auto cb = [node_ptr](ServiceResponseFuture future_result) {
+    std::weak_ptr<OffboardPreclandController> weak_this = std::static_pointer_cast<OffboardPreclandController>(shared_from_this());
+    auto cb = [weak_this](ServiceResponseFuture future_result) {
+      auto node = weak_this.lock();
+      if (!node) return;
       try {
         auto res = future_result.get();
         if (res->success) {
           int val = static_cast<int>(res->value.integer);
           if (val == 0 || val == 1 || val == 2) {
-            if (node_ptr->land_mode_ != val) {
-              RCLCPP_INFO(node_ptr->get_logger(), "Automatically synced PX4 RTL_PLD_MD param: %d -> %d", node_ptr->land_mode_, val);
-              node_ptr->land_mode_ = val;
+            if (node->land_mode_ != val) {
+              RCLCPP_INFO(node->get_logger(), "Automatically synced PX4 RTL_PLD_MD param: %d -> %d", node->land_mode_, val);
+              node->land_mode_ = val;
             }
           }
         }
       } catch (const std::exception & exc) {
-        RCLCPP_WARN(node_ptr->get_logger(), "Failed to query PX4 parameter RTL_PLD_MD: %s", exc.what());
+        RCLCPP_WARN(node->get_logger(), "Failed to query PX4 parameter RTL_PLD_MD: %s", exc.what());
       }
     };
     param_get_client_->async_send_request(req, cb);
@@ -425,18 +530,29 @@ std::tuple<Vector3, Quaternion> OffboardPreclandController::get_historical_state
   if (history_.empty()) {
     return {pos_enu_, q_att_};
   }
-  Vector3 best_pos = std::get<1>(history_.back());
-  Quaternion best_q = std::get<2>(history_.back());
-  double best_diff = std::numeric_limits<double>::infinity();
-  for (const auto & item : history_) {
-    double diff = std::abs(std::get<0>(item) - time);
-    if (diff < best_diff) {
-      best_diff = diff;
-      best_pos = std::get<1>(item);
-      best_q = std::get<2>(item);
+
+  auto it = std::lower_bound(history_.begin(), history_.end(), time,
+    [](const std::tuple<double, Vector3, Quaternion>& a, double val) {
+      return std::get<0>(a) < val;
     }
+  );
+
+  if (it == history_.end()) {
+    return {std::get<1>(history_.back()), std::get<2>(history_.back())};
   }
-  return {best_pos, best_q};
+  if (it == history_.begin()) {
+    return {std::get<1>(history_.front()), std::get<2>(history_.front())};
+  }
+
+  auto prev_it = std::prev(it);
+  double diff1 = std::abs(std::get<0>(*it) - time);
+  double diff2 = std::abs(std::get<0>(*prev_it) - time);
+
+  if (diff1 < diff2) {
+    return {std::get<1>(*it), std::get<2>(*it)};
+  } else {
+    return {std::get<1>(*prev_it), std::get<2>(*prev_it)};
+  }
 }
 
 double OffboardPreclandController::get_yaw(const Quaternion & q)
@@ -468,6 +584,18 @@ double OffboardPreclandController::circular_mean(const std::vector<double> & ang
     c += std::cos(a);
   }
   return std::atan2(s, c);
+}
+
+double OffboardPreclandController::compute_locked_yaw(const std::vector<double> & yaw_buf)
+{
+  if (yaw_buf.empty()) {
+    return sp_yaw_;
+  }
+  double avg_yaw = circular_mean(yaw_buf);
+  if (tag_yaw_sign_ < 0.0) {
+    avg_yaw = wrap_angle(avg_yaw + M_PI);
+  }
+  return wrap_angle(avg_yaw + tag_yaw_offset_);
 }
 
 void OffboardPreclandController::update_yaw()
@@ -506,11 +634,12 @@ Vector3 OffboardPreclandController::camera_to_enu(double cam_x, double cam_y, co
 
 Vector3 OffboardPreclandController::calculate_visual_setpoint(double z_sp, double max_step)
 {
-  if (!target_enu_.has_value()) {
+  auto target_val = target_enu_filtered_.has_value() ? target_enu_filtered_ : target_enu_;
+  if (!target_val.has_value()) {
     return Vector3{pos_enu_.x, pos_enu_.y, z_sp};
   }
-  double rel_x = std::get<0>(target_enu_.value()) - pos_enu_.x;
-  double rel_y = std::get<1>(target_enu_.value()) - pos_enu_.y;
+  double rel_x = std::get<0>(target_val.value()) - pos_enu_.x;
+  double rel_y = std::get<1>(target_val.value()) - pos_enu_.y;
   double delta_x = get_servo_gain() * rel_x;
   double delta_y = get_servo_gain() * rel_y;
   double d = std::sqrt(delta_x*delta_x + delta_y*delta_y);
@@ -539,6 +668,97 @@ double OffboardPreclandController::current_descent_rate()
   } else {
     return mpc_land_crwl_;
   }
+}
+
+bool OffboardPreclandController::can_transition(PrecLandState from, PrecLandState to)
+{
+  if (to == PrecLandState::IDLE) return true;
+  if (to == PrecLandState::DONE) return true;
+  if (to == PrecLandState::FALLBACK) return true;
+
+  switch (from) {
+    case PrecLandState::IDLE:
+      return (to == PrecLandState::START);
+    case PrecLandState::START:
+      return (to == PrecLandState::HORIZONTAL_APPROACH || to == PrecLandState::SEARCH);
+    case PrecLandState::HORIZONTAL_APPROACH:
+      return (to == PrecLandState::DESCEND_ABOVE_TARGET || to == PrecLandState::TARGET_LOST);
+    case PrecLandState::DESCEND_ABOVE_TARGET:
+      return (to == PrecLandState::FINAL_APPROACH || to == PrecLandState::TARGET_LOST || to == PrecLandState::SEARCH || to == PrecLandState::HORIZONTAL_APPROACH);
+    case PrecLandState::FINAL_APPROACH:
+      return false;
+    case PrecLandState::SEARCH:
+      return (to == PrecLandState::HORIZONTAL_APPROACH);
+    case PrecLandState::TARGET_LOST:
+      return (to == PrecLandState::HORIZONTAL_APPROACH || to == PrecLandState::DESCEND_ABOVE_TARGET || to == PrecLandState::SEARCH || to == PrecLandState::FINAL_APPROACH);
+    case PrecLandState::FALLBACK:
+      return false;
+    case PrecLandState::DONE:
+      return (to == PrecLandState::IDLE);
+  }
+  return false;
+}
+
+Vector3 OffboardPreclandController::apply_slew_rate(const Vector3 & target_sp, double dt)
+{
+  if (dt <= 0.0) return target_sp;
+
+  double vx_des = (target_sp.x - sp_prev_.x) / dt;
+  double vy_des = (target_sp.y - sp_prev_.y) / dt;
+
+  double v_des_norm = std::sqrt(vx_des * vx_des + vy_des * vy_des);
+  if (v_des_norm > sp_vel_max_) {
+    vx_des = (vx_des / v_des_norm) * sp_vel_max_;
+    vy_des = (vy_des / v_des_norm) * sp_vel_max_;
+  }
+
+  double ax = (vx_des - sp_prev_vel_.x) / dt;
+  double ay = (vy_des - sp_prev_vel_.y) / dt;
+
+  double a_norm = std::sqrt(ax * ax + ay * ay);
+  if (a_norm > sp_accel_max_) {
+    ax = (ax / a_norm) * sp_accel_max_;
+    ay = (ay / a_norm) * sp_accel_max_;
+  }
+
+  sp_prev_vel_.x += ax * dt;
+  sp_prev_vel_.y += ay * dt;
+
+  Vector3 filtered_sp;
+  filtered_sp.x = sp_prev_.x + sp_prev_vel_.x * dt;
+  filtered_sp.y = sp_prev_.y + sp_prev_vel_.y * dt;
+  filtered_sp.z = target_sp.z;
+
+  sp_prev_ = filtered_sp;
+  return filtered_sp;
+}
+
+void OffboardPreclandController::publish_static_transform(const std::string & camera_frame)
+{
+  if (tf_static_published_) {
+    return;
+  }
+  geometry_msgs::msg::TransformStamped t;
+  t.header.stamp = this->get_clock()->now();
+  t.header.frame_id = "base_link";
+  t.child_frame_id = camera_frame;
+  t.transform.translation.x = camera_offset_x_;
+  t.transform.translation.y = camera_offset_y_;
+  t.transform.translation.z = camera_offset_z_;
+
+  tf2::Quaternion q;
+  q.setRPY(camera_mount_roll_ * M_PI / 180.0,
+           camera_mount_pitch_ * M_PI / 180.0,
+           camera_mount_yaw_ * M_PI / 180.0);
+  t.transform.rotation.x = q.x();
+  t.transform.rotation.y = q.y();
+  t.transform.rotation.z = q.z();
+  t.transform.rotation.w = q.w();
+
+  tf_static_broadcaster_->sendTransform(t);
+  tf_static_published_ = true;
+  RCLCPP_INFO(this->get_logger(), "Published static transform base_link -> %s (RPY=%.1f, %.1f, %.1f)",
+              camera_frame.c_str(), camera_mount_roll_, camera_mount_pitch_, camera_mount_yaw_);
 }
 
 // ── Acceptance/Rejection Gates ─────────────────────────────
@@ -596,10 +816,6 @@ double OffboardPreclandController::now_sec()
 
 void OffboardPreclandController::transition(PrecLandState new_state)
 {
-  PrecLandState old = state_;
-  state_ = new_state;
-  
-  std::string old_str, new_str;
   auto to_string = [](PrecLandState s) {
     switch (s) {
       case PrecLandState::IDLE: return "IDLE";
@@ -614,6 +830,15 @@ void OffboardPreclandController::transition(PrecLandState new_state)
     }
     return "UNKNOWN";
   };
+
+  if (!can_transition(state_, new_state)) {
+    RCLCPP_WARN(this->get_logger(), "FSM: transition from %s to %s rejected by guard", to_string(state_), to_string(new_state));
+    return;
+  }
+
+  PrecLandState old = state_;
+  state_ = new_state;
+  
   RCLCPP_INFO(this->get_logger(), "FSM: %s → %s", to_string(old), to_string(new_state));
 
   if (new_state == PrecLandState::IDLE || new_state == PrecLandState::START) {
@@ -623,6 +848,22 @@ void OffboardPreclandController::transition(PrecLandState new_state)
     yaw_realign_complete_ = false;
     realign_cnt_ = 0;
     yaw_lock_stage_ = 0;
+    target_enu_filtered_.reset();
+    target_filt_vx_ = 0.0;
+    target_filt_vy_ = 0.0;
+  }
+
+  if (new_state == PrecLandState::START) {
+    sp_prev_ = pos_enu_;
+    sp_prev_vel_ = Vector3{0.0, 0.0, 0.0};
+  }
+
+  if (new_state == PrecLandState::FINAL_APPROACH) {
+    final_x_ = pos_enu_.x;
+    final_y_ = pos_enu_.y;
+    final_approach_start_ = now_sec();
+    sp_prev_ = pos_enu_;
+    sp_prev_vel_ = Vector3{0.0, 0.0, 0.0};
   }
 }
 
@@ -646,6 +887,35 @@ void OffboardPreclandController::gimbal_tick()
 
 void OffboardPreclandController::control_loop()
 {
+  double now = now_sec();
+  if (last_loop_run_time_ > 0.0) {
+    double dt_loop = now - last_loop_run_time_;
+    if (dt_loop > 0.2) {
+      RCLCPP_WARN(this->get_logger(), "Watchdog: Control loop delayed abnormally by %.3fs!", dt_loop);
+      if (state_ != PrecLandState::IDLE && state_ != PrecLandState::DONE && state_ != PrecLandState::FALLBACK) {
+        RCLCPP_ERROR(this->get_logger(), "Watchdog triggered: transitioning to FALLBACK");
+        transition(PrecLandState::FALLBACK);
+        last_loop_run_time_ = now;
+        return;
+      }
+    }
+  }
+  last_loop_run_time_ = now;
+
+  if (state_ == PrecLandState::FINAL_APPROACH) {
+    if (!armed_) {
+      RCLCPP_INFO(this->get_logger(), "Drone disarmed. Landing complete.");
+      transition(PrecLandState::DONE);
+      return;
+    }
+    if (landed_state_ == mavros_msgs::msg::ExtendedState::LANDED_STATE_ON_GROUND) {
+      RCLCPP_INFO(this->get_logger(), "Ground contact detected (landed_state=ON_GROUND). Switching to AUTO.LAND to disarm.");
+      set_mode("AUTO.LAND");
+      transition(PrecLandState::DONE);
+      return;
+    }
+  }
+
   if (!is_target_fresh()) {
     target_samples_.clear();
     tracking_count_ = 0;
@@ -663,11 +933,31 @@ void OffboardPreclandController::control_loop()
     case PrecLandState::DONE:                 st_done(); break;
   }
 
+  // Filter the target position using slew-rate limiter if we have a fresh target
+  if (target_enu_.has_value() && is_target_fresh()) {
+    double target_x = std::get<0>(target_enu_.value());
+    double target_y = std::get<1>(target_enu_.value());
+    double dt = 1.0 / ctrl_hz_;
+    
+    if (!target_enu_filtered_.has_value()) {
+      sp_prev_ = Vector3{target_x, target_y, 0.0};
+      sp_prev_vel_ = Vector3{0.0, 0.0, 0.0};
+      target_enu_filtered_ = {target_x, target_y};
+    } else {
+      Vector3 filt = apply_slew_rate(Vector3{target_x, target_y, 0.0}, dt);
+      target_enu_filtered_ = {filt.x, filt.y};
+    }
+  } else {
+    target_enu_filtered_.reset();
+    sp_prev_ = pos_enu_;
+    sp_prev_vel_ = Vector3{0.0, 0.0, 0.0};
+  }
+
   update_yaw();
 
   if (state_ != PrecLandState::IDLE && state_ != PrecLandState::DONE && 
       state_ != PrecLandState::FALLBACK && state_ != PrecLandState::FINAL_APPROACH) {
-    
+
     geometry_msgs::msg::PoseStamped msg;
     msg.header.stamp = this->get_clock()->now();
     msg.header.frame_id = "map";
@@ -677,6 +967,23 @@ void OffboardPreclandController::control_loop()
     msg.pose.orientation.z = std::sin(sp_yaw_ / 2.0);
     msg.pose.orientation.w = std::cos(sp_yaw_ / 2.0);
     pub_sp_->publish(msg);
+  } else if (state_ == PrecLandState::FINAL_APPROACH) {
+    mavros_msgs::msg::PositionTarget msg;
+    msg.header.stamp = this->get_clock()->now();
+    msg.header.frame_id = "map";
+    msg.coordinate_frame = mavros_msgs::msg::PositionTarget::FRAME_LOCAL_NED;
+    msg.position.x = final_x_;
+    msg.position.y = final_y_;
+    msg.velocity.z = -final_descent_rate_;
+    msg.yaw = sp_yaw_;
+    msg.type_mask = mavros_msgs::msg::PositionTarget::IGNORE_PZ |
+                    mavros_msgs::msg::PositionTarget::IGNORE_VX |
+                    mavros_msgs::msg::PositionTarget::IGNORE_VY |
+                    mavros_msgs::msg::PositionTarget::IGNORE_AFX |
+                    mavros_msgs::msg::PositionTarget::IGNORE_AFY |
+                    mavros_msgs::msg::PositionTarget::IGNORE_AFZ |
+                    mavros_msgs::msg::PositionTarget::IGNORE_YAW_RATE;
+    pub_sp_raw_->publish(msg);
   }
 
   try {
@@ -883,6 +1190,7 @@ void OffboardPreclandController::st_descend_above_target()
       yaw_lock_buf_.clear();
       yaw_realign_complete_ = false;
       realign_cnt_ = 0;
+      yaw_lock_stage_start_ = now_sec();
       RCLCPP_INFO(this->get_logger(), "Entering Stage 1 Yaw Lock at 7m");
     } else if (yaw_lock_stage_ == 1 && yaw_realign_complete_ && pos_enu_.z <= yaw_lock_alt_2_) {
       yaw_lock_stage_ = 2;
@@ -890,6 +1198,7 @@ void OffboardPreclandController::st_descend_above_target()
       yaw_lock_buf_.clear();
       yaw_realign_complete_ = false;
       realign_cnt_ = 0;
+      yaw_lock_stage_start_ = now_sec();
       RCLCPP_INFO(this->get_logger(), "Entering Stage 2 Yaw Lock at 3m");
     }
   }
@@ -904,6 +1213,25 @@ void OffboardPreclandController::st_descend_above_target()
     double hover_z = (yaw_lock_stage_ == 1) ? yaw_lock_alt_ : yaw_lock_alt_2_;
     descent_z_sp_ = hover_z;
     descent_drift_count_ = 0; // ignore drift checks while hovering
+
+    // Check timeout
+    double elapsed_hover = now_sec() - yaw_lock_stage_start_;
+    if (elapsed_hover > yaw_lock_timeout_ && !yaw_locked_ && !yaw_realign_complete_) {
+      if (yaw_lock_buf_.size() >= static_cast<size_t>(yaw_lock_min_samples_)) {
+        tag_yaw_abs_ = compute_locked_yaw(yaw_lock_buf_);
+        yaw_locked_ = true;
+        RCLCPP_WARN(this->get_logger(), 
+          "[YAW-TIMEOUT] Stage %d timed out (%.1fs). Using circular mean of %zu samples: sp_yaw=%.1f deg",
+          yaw_lock_stage_, elapsed_hover, yaw_lock_buf_.size(), tag_yaw_abs_.value() * 180.0 / M_PI
+        );
+      } else {
+        yaw_realign_complete_ = true; // skip yaw lock stage, move on
+        RCLCPP_WARN(this->get_logger(), 
+          "[YAW-TIMEOUT] Stage %d timed out (%.1fs) with insufficient samples (%zu/%d). Skipping yaw realign.",
+          yaw_lock_stage_, elapsed_hover, yaw_lock_buf_.size(), yaw_lock_min_samples_
+        );
+      }
+    }
 
     if (!yaw_locked_) {
       if (target_counter_ % 15 == 0) {
@@ -981,26 +1309,33 @@ void OffboardPreclandController::st_descend_above_target()
   }
   target_counter_++;
 
-  if (pos_enu_.z <= final_alt_param_ + 0.05) {
-    RCLCPP_INFO(this->get_logger(), "Final altitude reached (%.2fm)", final_alt_param_);
+  if (pos_enu_.z <= final_alt_param_ + 0.05 ||
+      landed_state_ == mavros_msgs::msg::ExtendedState::LANDED_STATE_ON_GROUND) {
+    RCLCPP_INFO(this->get_logger(), "Final altitude or ground contact reached (alt=%.2fm, landed=%d)", 
+                pos_enu_.z, landed_state_);
     transition(PrecLandState::FINAL_APPROACH);
   }
 }
 
 void OffboardPreclandController::st_final_approach()
 {
-  RCLCPP_INFO(this->get_logger(), "Switching to AUTO.LAND for final touchdown");
-  set_mode("AUTO.LAND");
-  transition(PrecLandState::DONE);
+  // Timeout check
+  double elapsed = now_sec() - final_approach_start_;
+  if (elapsed > final_approach_timeout_) {
+    RCLCPP_WARN(this->get_logger(), "FINAL_APPROACH timeout reached (%.1fs) but drone still armed. Fallback to AUTO.LAND!", elapsed);
+    set_mode("AUTO.LAND");
+    transition(PrecLandState::DONE);
+  }
 }
 
 void OffboardPreclandController::st_search()
 {
   double s_alt = std::min(search_alt_, search_alt_max_);
   Vector3 anchor;
-  if (target_enu_.has_value()) {
-    anchor.x = std::get<0>(target_enu_.value());
-    anchor.y = std::get<1>(target_enu_.value());
+  auto target_val = target_enu_filtered_.has_value() ? target_enu_filtered_ : target_enu_;
+  if (target_val.has_value()) {
+    anchor.x = std::get<0>(target_val.value());
+    anchor.y = std::get<1>(target_val.value());
   } else if (land_hold_pos_.has_value()) {
     anchor = land_hold_pos_.value();
   } else {
