@@ -30,9 +30,9 @@ offboard_precland_controller:
     # --- Mode / Limits ---
     land_mode: 2
     abort_alt: 0.3
-    final_alt: 0.1
+    final_alt: 0.3
     final_approach_timeout: 8.0
-    final_descent_rate: 0.15
+    final_descent_rate: 0.30
 
     # --- FSM Configuration Constants ---
     ctrl_hz: 30
@@ -58,7 +58,7 @@ offboard_precland_controller:
     mpc_land_alt_crawl: 2.0
     mpc_z_vel_max_dn: 1.5
     mpc_land_speed: 0.7
-    mpc_land_crwl: 0.2
+    mpc_land_crwl: 0.3
     high_alt: 8.0
     low_alt: 5.0
     alpha_high: 0.18

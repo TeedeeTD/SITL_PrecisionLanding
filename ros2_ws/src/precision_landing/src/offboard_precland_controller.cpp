@@ -215,6 +215,7 @@ OffboardPreclandController::OffboardPreclandController(const rclcpp::NodeOptions
   arm_client_ = this->create_client<mavros_msgs::srv::CommandBool>("/mavros/cmd/arming");
   cmd_client_ = this->create_client<mavros_msgs::srv::CommandLong>("/mavros/cmd/command");
   param_get_client_ = this->create_client<mavros_msgs::srv::ParamGet>("/mavros/param/get");
+  param_set_client_ = this->create_client<mavros_msgs::srv::ParamSet>("/mavros/param/set");
   wp_pull_client_ = this->create_client<mavros_msgs::srv::WaypointPull>("/mavros/mission/pull");
 
   // --- Timers ---
@@ -487,11 +488,69 @@ void OffboardPreclandController::send_command(uint16_t command, float p1, float 
 
 void OffboardPreclandController::disarm()
 {
+  RCLCPP_INFO(this->get_logger(), "Sending force-disarm (MAV_CMD 400, magic=21196)");
+  
+  if (cmd_client_->service_is_ready()) {
+    auto req = std::make_shared<mavros_msgs::srv::CommandLong::Request>();
+    req->command = 400;
+    req->param1 = 0.0f;
+    req->param2 = 21196.0f;
+
+    auto cb = [this](rclcpp::Client<mavros_msgs::srv::CommandLong>::SharedFuture future) {
+      try {
+        auto res = future.get();
+        if (!res->success || res->result != 0 /* MAV_RESULT_ACCEPTED */) {
+          RCLCPP_WARN(this->get_logger(),
+            "Force-disarm command NOT accepted (success=%d, result=%d) — will retry",
+            res->success, res->result);
+        } else {
+          RCLCPP_INFO(this->get_logger(), "Force-disarm command ACCEPTED by PX4");
+        }
+      } catch (const std::exception & e) {
+        RCLCPP_ERROR(this->get_logger(), "Disarm command call failed: %s", e.what());
+      }
+    };
+    cmd_client_->async_send_request(req, cb);
+  } else {
+    RCLCPP_ERROR(this->get_logger(), "cmd_client_ not ready — cannot send disarm!");
+  }
+
+  // Kênh dự phòng song song qua CommandBool
   if (arm_client_->service_is_ready()) {
     auto req = std::make_shared<mavros_msgs::srv::CommandBool::Request>();
     req->value = false;
-    arm_client_->async_send_request(req);
+    arm_client_->async_send_request(req,
+      [this](rclcpp::Client<mavros_msgs::srv::CommandBool>::SharedFuture f) {
+        try {
+          auto res = f.get();
+          if (!res->success) {
+            RCLCPP_WARN(this->get_logger(), "CommandBool disarm also rejected");
+          }
+        } catch (...) {}
+      });
   }
+
+  disarm_attempt_time_ = now_sec();
+}
+
+void OffboardPreclandController::set_px4_param_float(const std::string & param_id, float value)
+{
+  if (!param_set_client_->service_is_ready()) return;
+  auto req = std::make_shared<mavros_msgs::srv::ParamSet::Request>();
+  req->param_id = param_id;
+  req->value.real = static_cast<double>(value);
+  req->value.integer = 0;
+  param_set_client_->async_send_request(req,
+    [this, param_id, value](rclcpp::Client<mavros_msgs::srv::ParamSet>::SharedFuture f) {
+      try {
+        auto res = f.get();
+        if (res->success) {
+          RCLCPP_INFO(this->get_logger(), "Param %s set to %.2f", param_id.c_str(), value);
+        } else {
+          RCLCPP_WARN(this->get_logger(), "Param %s set failed", param_id.c_str());
+        }
+      } catch (...) {}
+    });
 }
 
 void OffboardPreclandController::query_px4_params()
@@ -856,12 +915,15 @@ void OffboardPreclandController::transition(PrecLandState new_state)
   if (new_state == PrecLandState::START) {
     sp_prev_ = pos_enu_;
     sp_prev_vel_ = Vector3{0.0, 0.0, 0.0};
+    disarm_requested_ = false;
+    auto_land_fallback_sent_ = false;
   }
 
   if (new_state == PrecLandState::FINAL_APPROACH) {
     final_x_ = pos_enu_.x;
     final_y_ = pos_enu_.y;
     final_approach_start_ = now_sec();
+    final_approach_entry_z_ = pos_enu_.z;  // record entry altitude for descent comparison
     sp_prev_ = pos_enu_;
     sp_prev_vel_ = Vector3{0.0, 0.0, 0.0};
   }
@@ -905,14 +967,34 @@ void OffboardPreclandController::control_loop()
   if (state_ == PrecLandState::FINAL_APPROACH) {
     if (!armed_) {
       RCLCPP_INFO(this->get_logger(), "Drone disarmed. Landing complete.");
+      disarm_requested_ = false;
       transition(PrecLandState::DONE);
       return;
     }
-    if (landed_state_ == mavros_msgs::msg::ExtendedState::LANDED_STATE_ON_GROUND) {
-      RCLCPP_INFO(this->get_logger(), "Ground contact detected (landed_state=ON_GROUND). Switching to AUTO.LAND to disarm.");
-      set_mode("AUTO.LAND");
-      transition(PrecLandState::DONE);
-      return;
+    
+    if (disarm_requested_ && armed_) {
+      if ((now - disarm_attempt_time_) >= 0.2) {
+        RCLCPP_WARN(this->get_logger(), "Retrying force-disarm (%.1fs since first attempt)",
+                    now - disarm_attempt_time_first_);
+        disarm();
+      }
+      
+      double since_first = now - disarm_attempt_time_first_;
+      if (since_first > 2.0 && !auto_land_fallback_sent_) {
+        RCLCPP_ERROR(this->get_logger(),
+          "Force-disarm not confirmed after 2s — escalating to AUTO.LAND as last resort");
+        set_mode("AUTO.LAND");
+        auto_land_fallback_sent_ = true;
+      }
+    }
+
+    if (!disarm_requested_ &&
+        landed_state_ == mavros_msgs::msg::ExtendedState::LANDED_STATE_ON_GROUND) {
+      RCLCPP_INFO(this->get_logger(), "landed_state=ON_GROUND detected → force-disarm");
+      disarm_requested_ = true;
+      disarm_attempt_time_first_ = now_sec();
+      disarm();
+      // KHÔNG transition(DONE) ở đây nữa
     }
   }
 
@@ -967,7 +1049,9 @@ void OffboardPreclandController::control_loop()
     msg.pose.orientation.z = std::sin(sp_yaw_ / 2.0);
     msg.pose.orientation.w = std::cos(sp_yaw_ / 2.0);
     pub_sp_->publish(msg);
-  } else if (state_ == PrecLandState::FINAL_APPROACH) {
+  } else if (state_ == PrecLandState::FINAL_APPROACH && !disarm_requested_) {
+    // Stop publishing setpoint the moment disarm is requested
+    // to avoid OFFBOARD heartbeat keeping motors alive after touch-down
     mavros_msgs::msg::PositionTarget msg;
     msg.header.stamp = this->get_clock()->now();
     msg.header.frame_id = "map";
@@ -1319,12 +1403,42 @@ void OffboardPreclandController::st_descend_above_target()
 
 void OffboardPreclandController::st_final_approach()
 {
-  // Timeout check
-  double elapsed = now_sec() - final_approach_start_;
+  double elapsed       = now_sec() - final_approach_start_;
+  double actual_drop   = final_approach_entry_z_ - pos_enu_.z;
+  double expected_drop = final_descent_rate_ * elapsed;
+
+  // Diagnostic log every second
+  if (target_counter_ % ctrl_hz_ == 0) {
+    RCLCPP_INFO(this->get_logger(),
+      "FINAL_APPROACH: t=%.1fs alt=%.3fm drop=%.3f/%.3fm landed=%d disarm_req=%s",
+      elapsed, pos_enu_.z, actual_drop, expected_drop,
+      (int)landed_state_, disarm_requested_ ? "true" : "false");
+  }
+  target_counter_++;
+
+  if (disarm_requested_) return;  // waiting for PX4 to confirm disarm
+
+  // Ground contact: actual descent has fallen behind expected descent by > 15cm.
+  // This means the drone has been physically blocked from descending for ~0.5s (at 0.3m/s).
+  if (elapsed >= 0.5 && (expected_drop - actual_drop) > 0.15) {
+    RCLCPP_INFO(this->get_logger(),
+      "Ground contact: blocked by %.1fcm → force-disarm (retry loop takes over)",
+      (expected_drop - actual_drop) * 100.0);
+    set_px4_param_float("COM_DISARM_LAND", 0.1f);
+    disarm_requested_ = true;
+    disarm_attempt_time_first_ = now_sec();
+    disarm();
+    return;
+  }
+
+  // Timeout fallback
   if (elapsed > final_approach_timeout_) {
-    RCLCPP_WARN(this->get_logger(), "FINAL_APPROACH timeout reached (%.1fs) but drone still armed. Fallback to AUTO.LAND!", elapsed);
-    set_mode("AUTO.LAND");
-    transition(PrecLandState::DONE);
+    RCLCPP_WARN(this->get_logger(), "FINAL_APPROACH timeout (%.1fs) → force-disarm", elapsed);
+    set_px4_param_float("COM_DISARM_LAND", 0.1f);
+    disarm_requested_ = true;
+    disarm_attempt_time_first_ = now_sec();
+    disarm();
+    return;
   }
 }
 

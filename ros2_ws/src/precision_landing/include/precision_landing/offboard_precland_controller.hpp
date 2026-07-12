@@ -18,6 +18,7 @@
 #include <mavros_msgs/srv/set_mode.hpp>
 #include <mavros_msgs/srv/command_long.hpp>
 #include <mavros_msgs/srv/param_get.hpp>
+#include <mavros_msgs/srv/param_set.hpp>
 #include <mavros_msgs/srv/waypoint_pull.hpp>
 #include <tf2_ros/transform_listener.h>
 #include <tf2_ros/buffer.h>
@@ -90,6 +91,7 @@ private:
   void set_mode(const std::string & mode);
   void send_command(uint16_t command, float p1=0.0f, float p2=0.0f, float p3=0.0f, float p4=0.0f, float p5=0.0f, float p6=0.0f, float p7=0.0f);
   void disarm();
+  void set_px4_param_float(const std::string & param_id, float value);
   void pull_waypoints_immediately();
   void transition(PrecLandState new_state);
   bool can_transition(PrecLandState from, PrecLandState to);
@@ -222,6 +224,13 @@ private:
   bool is_landing_{false};
   bool armed_{false};
   bool mavros_connected_{false};
+  bool disarm_requested_{false};  // true after direct disarm() sent on ground contact
+  double disarm_attempt_time_{0.0};  // last time disarm was sent (for retry)
+  double disarm_attempt_time_first_{0.0};  // thời điểm gửi disarm LẦN ĐẦU (không đổi khi retry)
+  bool auto_land_fallback_sent_{false};
+
+  // --- Altitude stall detection (ground contact without relying on landed_state) ---
+  double final_approach_entry_z_{0.0};  // altitude when FINAL_APPROACH was entered
 
   // --- Target tracking ---
   std::deque<std::tuple<double, double>> target_samples_; // Queue for filtering
@@ -276,6 +285,7 @@ private:
   rclcpp::Client<mavros_msgs::srv::CommandBool>::SharedPtr arm_client_;
   rclcpp::Client<mavros_msgs::srv::CommandLong>::SharedPtr cmd_client_;
   rclcpp::Client<mavros_msgs::srv::ParamGet>::SharedPtr param_get_client_;
+  rclcpp::Client<mavros_msgs::srv::ParamSet>::SharedPtr param_set_client_;
   rclcpp::Client<mavros_msgs::srv::WaypointPull>::SharedPtr wp_pull_client_;
 
   // --- Timers ---
