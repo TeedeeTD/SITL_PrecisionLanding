@@ -325,6 +325,7 @@ void OffboardPreclandController::on_target(const geometry_msgs::msg::PoseStamped
   double world_yaw_sample = 0.0;
   double abs_x = 0.0;
   double abs_y = 0.0;
+  double raw_pad_z = 0.0;
   Quaternion h_q{1.0, 0.0, 0.0, 0.0};
 
   try {
@@ -334,8 +335,7 @@ void OffboardPreclandController::on_target(const geometry_msgs::msg::PoseStamped
     abs_x = msg_map.pose.position.x;
     abs_y = msg_map.pose.position.y;
     
-    double raw_pad_z = msg_map.pose.position.z;
-    virtual_pad_z_ = ema_alpha_pad_ * raw_pad_z + (1.0 - ema_alpha_pad_) * virtual_pad_z_;
+    raw_pad_z = msg_map.pose.position.z;
 
     Quaternion q_tag_world{
       msg_map.pose.orientation.w,
@@ -362,8 +362,7 @@ void OffboardPreclandController::on_target(const geometry_msgs::msg::PoseStamped
     abs_x = h_pos.x + rel.x;
     abs_y = h_pos.y + rel.y;
 
-    double raw_pad_z = h_pos.z - tvec_z;
-    virtual_pad_z_ = ema_alpha_pad_ * raw_pad_z + (1.0 - ema_alpha_pad_) * virtual_pad_z_;
+    raw_pad_z = h_pos.z - tvec_z;
 
     Quaternion q_tag_cam{
       msg->pose.orientation.w,
@@ -386,13 +385,16 @@ void OffboardPreclandController::on_target(const geometry_msgs::msg::PoseStamped
     return;
   }
 
+  // Sample is valid, update virtual pad altitude
+  virtual_pad_z_ = ema_alpha_pad_ * raw_pad_z + (1.0 - ema_alpha_pad_) * virtual_pad_z_;
+
   target_enu_ = {abs_x, abs_y};
   target_rel_norm_ = rn;
   last_pose_time_ = now_sec();
 
   if (align_yaw_to_tag_) {
     double target_lock_alt = (yaw_lock_stage_ <= 1) ? yaw_lock_alt_ : yaw_lock_alt_2_;
-    if (state_ == PrecLandState::DESCEND_ABOVE_TARGET && !yaw_locked_ && pos_enu_.z <= target_lock_alt) {
+    if (state_ == PrecLandState::DESCEND_ABOVE_TARGET && !yaw_locked_ && get_alt() <= target_lock_alt) {
       yaw_lock_buf_.push_back(world_yaw_sample);
       if (static_cast<int>(yaw_lock_buf_.size()) >= yaw_lock_samples_) {
         if (!yaw_lock_buf_.empty()) {
@@ -401,7 +403,7 @@ void OffboardPreclandController::on_target(const geometry_msgs::msg::PoseStamped
           RCLCPP_INFO(
             this->get_logger(),
             "[YAW-LOCK] latched target=%.1f deg from %d samples at %.1fm",
-            tag_yaw_abs_.value() * 180.0 / M_PI, (int)yaw_lock_buf_.size(), pos_enu_.z
+            tag_yaw_abs_.value() * 180.0 / M_PI, (int)yaw_lock_buf_.size(), get_alt()
           );
         }
       }
@@ -722,7 +724,7 @@ Vector3 OffboardPreclandController::calculate_visual_setpoint(double z_sp, doubl
 
 double OffboardPreclandController::current_descent_rate()
 {
-  double z = pos_enu_.z;
+  double z = get_alt();
   if (z > mpc_land_alt1_) {
     return mpc_z_vel_max_dn_;
   } else if (z > mpc_land_alt2_) {
@@ -924,6 +926,7 @@ void OffboardPreclandController::transition(PrecLandState new_state)
     sp_prev_vel_ = Vector3{0.0, 0.0, 0.0};
     disarm_requested_ = false;
     auto_land_fallback_sent_ = false;
+    virtual_pad_z_ = 0.0;
   }
 
   if (new_state == PrecLandState::FINAL_APPROACH) {
