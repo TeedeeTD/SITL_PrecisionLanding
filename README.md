@@ -596,3 +596,34 @@ Chọn topic `/landing/annotated_image` từ thanh công cụ để theo dõi tr
     ]}"
     ```
 
+---
+
+## 3.0. Hướng Dẫn Chạy Test Trên Camera Thật (Real Camera RTSP)
+
+Để kiểm tra trực tiếp khả năng nhận diện Aruco Fractal của camera vật lý (SIYI A8 Mini hoặc bất kỳ camera IP nào) mà chưa cần chạy mô phỏng hay nối với Pixhawk, sử dụng launch file độc lập sau:
+
+#### Terminal 1: Khởi động Camera Publisher và Aruco Tracker
+```bash
+source /opt/ros/humble/setup.bash
+source ~/PX4/examples/SITL_PrecisionLanding/ros2_ws/install/setup.bash
+
+# Tham số enable_mavros:=false dùng để chạy khi chưa có kết nối mạch FCU
+ros2 launch precision_landing real_fractal_detect.launch.py enable_mavros:=false
+```
+
+*Lưu ý: Nếu bạn muốn thay đổi địa chỉ RTSP hoặc thông số camera calibration (tiêu cự fx, fy, cx, cy), hãy chỉnh sửa tại file `~/PX4/examples/SITL_PrecisionLanding/ros2_ws/src/precision_landing/config/rtsp_publisher_params.yaml`.*
+
+#### Terminal 2: Theo dõi luồng ảnh Debug
+Bạn mở rqt để xem luồng video từ camera kèm theo khung bounding box nhận diện marker (nếu có):
+```bash
+source /opt/ros/humble/setup.bash
+ros2 run rqt_image_view rqt_image_view
+```
+*Chọn topic `/siyi/fractal_debug` trên thanh công cụ của RQT.*
+
+Nếu bạn muốn kiểm tra luồng tọa độ (pose) nhận diện liên tục:
+```bash
+source /opt/ros/humble/setup.bash
+source ~/PX4/examples/SITL_PrecisionLanding/ros2_ws/install/setup.bash
+ros2 topic echo /siyi/fractal_pose
+```
