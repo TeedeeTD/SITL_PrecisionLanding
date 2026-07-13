@@ -231,6 +231,8 @@ private:
 
   // --- Altitude stall detection (ground contact without relying on landed_state) ---
   double final_approach_entry_z_{0.0};  // altitude when FINAL_APPROACH was entered
+  double virtual_pad_z_{0.0};           // EMA filtered absolute pad height
+  double ema_alpha_pad_{0.2};           // Smoothing factor for virtual pad z
 
   // --- Target tracking ---
   std::deque<std::tuple<double, double>> target_samples_; // Queue for filtering
