@@ -32,24 +32,10 @@ def _maybe_start_mavros(context):
 def generate_launch_description():
     pkg_share = get_package_share_directory('precision_landing')
     rtsp_params_file = os.path.join(pkg_share, 'config', 'rtsp_publisher_params.yaml')
+    offboard_params_file = os.path.join(pkg_share, 'config', 'offboard_precland_params.yaml')
 
     # ── Launch Arguments ────────────────────────────────────────────
 
-    marker_configuration_arg = DeclareLaunchArgument(
-        'marker_configuration',
-        default_value=os.path.join(
-            os.path.expanduser('~'),
-            'PX4/examples/SITL_PrecisionLanding/px4/Tools/simulation/gz/models/'
-            'fractal_aruco_marker/custom_fractal.yml'
-        ),
-        description='Absolute path to the fractal marker configuration YAML'
-    )
-
-    marker_size_arg = DeclareLaunchArgument(
-        'marker_size',
-        default_value='0.50',
-        description='Physical size of outer marker in meters'
-    )
 
     enable_mavros_arg = DeclareLaunchArgument(
         'enable_mavros',
@@ -83,25 +69,12 @@ def generate_launch_description():
         package='precision_landing',
         executable='aruco_fractal_tracker',
         name='aruco_fractal_tracker',
-        parameters=[{
-            'marker_configuration': LaunchConfiguration('marker_configuration'),
-            'marker_size': LaunchConfiguration('marker_size'),
-            'min_tracking_z': 0.15,
-            'max_tracking_z': 20.0,
-            'max_pose_jump_m': 2.0,
-            'acquire_good_frames': 5,
-            'lost_bad_frames': 3,
-            'show_latency_overlay': True,
-            'latency_warn_ms': 100.0,
-            'use_sim_time': False,
-            # Camera-to-body sign mapping for real SIYI A8 Mini
-            # pointing straight down: camera X = body East, camera Y = body South
-            'camera_x_to_body_east_sign': -1.0,
-            'camera_y_to_body_north_sign': 1.0,
-            # Camera offset from drone center
-            'camera_offset_x': 0.0,
-            'camera_offset_y': 0.0,
-        }],
+        parameters=[
+            offboard_params_file,
+            {
+                'use_sim_time': False,
+            }
+        ],
         remappings=[
             ('image_input_topic', '/siyi/image_raw'),
             ('camera_info_topic', '/siyi/camera_info'),
@@ -113,8 +86,6 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        marker_configuration_arg,
-        marker_size_arg,
         enable_mavros_arg,
         fcu_url_arg,
         mavros_launch,

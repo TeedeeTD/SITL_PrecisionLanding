@@ -1,4 +1,4 @@
-offboard_precland_controller:
+/**:
   ros__parameters:
     # --- Physical Configs ---
     camera_x_to_body_east_sign: 1.0
@@ -7,10 +7,21 @@ offboard_precland_controller:
     camera_offset_x: 0.157
     camera_offset_y: 0.0
     camera_offset_z: -0.15
-    marker_size: 0.5
+    marker_size: 0.40
     camera_mount_roll: 180.0
     camera_mount_pitch: 0.0
     camera_mount_yaw: -90.0
+
+    # --- Tracker Configuration ---
+    marker_configuration: "/home/teedee/PX4/Tools/simulation/gz/models/fractal_aruco_marker/custom_fractal.yml"
+    min_tracking_z: 0.15
+    max_tracking_z: 20.0
+    max_pose_jump_m: 2.0
+    acquire_good_frames: 8
+    lost_bad_frames: 10
+    show_latency_overlay: true
+    latency_warn_ms: 100.0
+
 
     # --- Topics ---
     target_topic: "/landing/target_camera"
