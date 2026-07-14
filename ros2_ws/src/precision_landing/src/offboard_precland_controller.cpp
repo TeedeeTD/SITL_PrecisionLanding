@@ -1060,36 +1060,21 @@ void OffboardPreclandController::control_loop()
   update_yaw();
 
   if (state_ != PrecLandState::IDLE && state_ != PrecLandState::DONE &&
-      state_ != PrecLandState::FALLBACK && state_ != PrecLandState::FINAL_APPROACH) {
+      state_ != PrecLandState::FALLBACK) {
 
-    geometry_msgs::msg::PoseStamped msg;
-    msg.header.stamp = this->get_clock()->now();
-    msg.header.frame_id = "map";
-    msg.pose.position.x = sp_enu_.x;
-    msg.pose.position.y = sp_enu_.y;
-    msg.pose.position.z = sp_enu_.z;
-    msg.pose.orientation.z = std::sin(sp_yaw_ / 2.0);
-    msg.pose.orientation.w = std::cos(sp_yaw_ / 2.0);
-    pub_sp_->publish(msg);
-  } else if (state_ == PrecLandState::FINAL_APPROACH && !disarm_requested_) {
     // Stop publishing setpoint the moment disarm is requested
     // to avoid OFFBOARD heartbeat keeping motors alive after touch-down
-    mavros_msgs::msg::PositionTarget msg;
-    msg.header.stamp = this->get_clock()->now();
-    msg.header.frame_id = "map";
-    msg.coordinate_frame = mavros_msgs::msg::PositionTarget::FRAME_LOCAL_NED;
-    msg.position.x = final_x_;
-    msg.position.y = final_y_;
-    msg.velocity.z = -final_descent_rate_;
-    msg.yaw = sp_yaw_;
-    msg.type_mask = mavros_msgs::msg::PositionTarget::IGNORE_PZ |
-                    mavros_msgs::msg::PositionTarget::IGNORE_VX |
-                    mavros_msgs::msg::PositionTarget::IGNORE_VY |
-                    mavros_msgs::msg::PositionTarget::IGNORE_AFX |
-                    mavros_msgs::msg::PositionTarget::IGNORE_AFY |
-                    mavros_msgs::msg::PositionTarget::IGNORE_AFZ |
-                    mavros_msgs::msg::PositionTarget::IGNORE_YAW_RATE;
-    pub_sp_raw_->publish(msg);
+    if (!(state_ == PrecLandState::FINAL_APPROACH && disarm_requested_)) {
+      geometry_msgs::msg::PoseStamped msg;
+      msg.header.stamp = this->get_clock()->now();
+      msg.header.frame_id = "map";
+      msg.pose.position.x = sp_enu_.x;
+      msg.pose.position.y = sp_enu_.y;
+      msg.pose.position.z = sp_enu_.z;
+      msg.pose.orientation.z = std::sin(sp_yaw_ / 2.0);
+      msg.pose.orientation.w = std::cos(sp_yaw_ / 2.0);
+      pub_sp_->publish(msg);
+    }
   }
 
   try {
@@ -1417,7 +1402,7 @@ void OffboardPreclandController::st_descend_above_target()
   }
   target_counter_++;
 
-  if (get_alt() <= final_alt_param_ + 0.05 ||
+  if (get_alt() <= final_alt_param_ + 0.15 ||
       landed_state_ == mavros_msgs::msg::ExtendedState::LANDED_STATE_ON_GROUND) {
     RCLCPP_INFO(this->get_logger(), "Final altitude or ground contact reached (relative_alt=%.2fm, landed=%d)",
                 get_alt(), landed_state_);
@@ -1471,12 +1456,15 @@ void OffboardPreclandController::st_final_approach()
     // — chính là hành vi "blind descent" cũ, dùng làm fallback tự nhiên.
   }
 
+  // Cập nhật sp_enu_ để dùng chung pub_sp_ với các state khác
+  sp_enu_.x = final_x_;
+  sp_enu_.y = final_y_;
   // Push setpoint xuống để ép hạ độ cao (blind theo thời gian, như cũ)
   sp_enu_.z = final_approach_entry_z_ - expected_drop;
 
-  // Ground contact: actual descent has fallen behind expected descent by > 15cm.
-  // This means the drone has been physically blocked from descending for ~0.5s (at 0.3m/s).
-  if (elapsed >= 0.5 && (expected_drop - actual_drop) > 0.15) {
+  // Ground contact: actual descent has fallen behind expected descent by > 30cm.
+  // This means the drone has been physically blocked from descending for ~1.0s (at 0.3m/s).
+  if (elapsed >= 1.0 && (expected_drop - actual_drop) > 0.30) {
     RCLCPP_INFO(this->get_logger(),
       "Ground contact: blocked by %.1fcm → force-disarm (retry loop takes over)",
       (expected_drop - actual_drop) * 100.0);
