@@ -33,6 +33,7 @@ offboard_precland_controller:
     final_alt: 0.3
     final_approach_timeout: 8.0
     final_descent_rate: 0.30
+    final_align_step: 0.05
 
     # --- FSM Configuration Constants ---
     ctrl_hz: 30

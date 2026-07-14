@@ -190,6 +190,7 @@ private:
 
   double final_approach_timeout_;
   double final_descent_rate_;
+  double final_align_step_;
   double sp_vel_max_;
   double sp_accel_max_;
   double yaw_lock_timeout_;
