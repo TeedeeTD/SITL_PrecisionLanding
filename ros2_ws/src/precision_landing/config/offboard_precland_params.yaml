@@ -13,7 +13,7 @@
     camera_mount_yaw: -90.0
 
     # --- Tracker Configuration ---
-    marker_configuration: "/home/teedee/PX4/Tools/simulation/gz/models/fractal_aruco_marker/custom_fractal.yml"
+    marker_configuration: "config/custom_fractal.yml"
     min_tracking_z: 0.15
     max_tracking_z: 20.0
     max_pose_jump_m: 2.0

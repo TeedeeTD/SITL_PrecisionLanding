@@ -336,7 +336,7 @@ void OffboardPreclandController::on_target(const geometry_msgs::msg::PoseStamped
     msg_map = tf_buffer_->transform(msg_zero_time, "map", tf2::durationFromSec(0.05));
     abs_x = msg_map.pose.position.x;
     abs_y = msg_map.pose.position.y;
-    
+
     raw_pad_z = msg_map.pose.position.z;
 
     Quaternion q_tag_world{
@@ -503,7 +503,7 @@ void OffboardPreclandController::send_command(uint16_t command, float p1, float 
 void OffboardPreclandController::disarm()
 {
   RCLCPP_INFO(this->get_logger(), "Sending force-disarm (MAV_CMD 400, magic=21196)");
-  
+
   if (cmd_client_->service_is_ready()) {
     auto req = std::make_shared<mavros_msgs::srv::CommandLong::Request>();
     req->command = 400;
@@ -993,14 +993,14 @@ void OffboardPreclandController::control_loop()
       transition(PrecLandState::DONE);
       return;
     }
-    
+
     if (disarm_requested_ && armed_) {
       if ((now - disarm_attempt_time_) >= 0.2) {
         RCLCPP_WARN(this->get_logger(), "Retrying force-disarm (%.1fs since first attempt)",
                     now - disarm_attempt_time_first_);
         disarm();
       }
-      
+
       double since_first = now - disarm_attempt_time_first_;
       if (since_first > 2.0 && !auto_land_fallback_sent_) {
         RCLCPP_ERROR(this->get_logger(),
@@ -1432,6 +1432,16 @@ void OffboardPreclandController::st_final_approach()
     return;  // waiting for PX4 to confirm disarm
   }
 
+  // Fast-track: Disarm immediately if PX4's internal land detector confirms we are on the ground
+  if (landed_state_ == mavros_msgs::msg::ExtendedState::LANDED_STATE_ON_GROUND) {
+    RCLCPP_INFO(this->get_logger(), "Ground contact detected via LandedState → force-disarm");
+    set_px4_param_float("COM_DISARM_LAND", 0.1f);
+    disarm_requested_ = true;
+    disarm_attempt_time_first_ = now_sec();
+    disarm();
+    return;
+  }
+
   // --- Tiếp tục bám target, có giới hạn tốc độ chỉnh (rate-limited), chỉ khi:
   //   - target vẫn "fresh" (chưa timeout)
   //   - chưa phát hiện ground contact (đảm bảo ở nhánh trên rồi)
@@ -1462,9 +1472,8 @@ void OffboardPreclandController::st_final_approach()
   // Push setpoint xuống để ép hạ độ cao (blind theo thời gian, như cũ)
   sp_enu_.z = final_approach_entry_z_ - expected_drop;
 
-  // Ground contact: actual descent has fallen behind expected descent by > 30cm.
-  // This means the drone has been physically blocked from descending for ~1.0s (at 0.3m/s).
-  if (elapsed >= 1.0 && (expected_drop - actual_drop) > 0.30) {
+  // Ground contact fallback: actual descent has fallen behind expected descent by > 20cm.
+  if (elapsed >= 1.0 && (expected_drop - actual_drop) > 0.20) {
     RCLCPP_INFO(this->get_logger(),
       "Ground contact: blocked by %.1fcm → force-disarm (retry loop takes over)",
       (expected_drop - actual_drop) * 100.0);

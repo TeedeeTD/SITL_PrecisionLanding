@@ -72,6 +72,11 @@ def generate_launch_description():
         parameters=[
             offboard_params_file,
             {
+                'marker_configuration': os.path.join(
+                    get_package_share_directory('precision_landing'),
+                    'config',
+                    'custom_fractal.yml'
+                ),
                 'use_sim_time': False,
             }
         ],
