@@ -930,8 +930,15 @@ void OffboardPreclandController::transition(PrecLandState new_state)
   }
 
   if (new_state == PrecLandState::FINAL_APPROACH) {
-    final_x_ = pos_enu_.x;
-    final_y_ = pos_enu_.y;
+    auto target_val = target_enu_filtered_.has_value() ? target_enu_filtered_ : target_enu_;
+    if (target_val.has_value()) {
+      final_x_ = std::get<0>(target_val.value());
+      final_y_ = std::get<1>(target_val.value());
+    } else {
+      // Fallback: if no target detected, keep current position
+      final_x_ = pos_enu_.x;
+      final_y_ = pos_enu_.y;
+    }
     final_approach_start_ = now_sec();
     final_approach_entry_z_ = pos_enu_.z;  // record entry altitude for descent comparison
     sp_prev_ = pos_enu_;

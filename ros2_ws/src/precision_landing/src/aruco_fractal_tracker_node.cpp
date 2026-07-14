@@ -38,7 +38,7 @@ ArucoFractalTracker::ArucoFractalTracker(const rclcpp::NodeOptions &options)
   : Node("aruco_fractal_tracker", options)
 {
   this->declare_parameter<std::string>("marker_configuration", "");
-  this->declare_parameter<double>("marker_size", 0.0);
+  this->declare_parameter<double>("marker_size", 0.5);
   this->declare_parameter<double>("min_tracking_z", 0.15);
   this->declare_parameter<double>("max_tracking_z", 12.0);
   this->declare_parameter<double>("max_pose_jump_m", 2.0);

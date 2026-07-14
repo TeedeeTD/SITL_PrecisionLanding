@@ -7,7 +7,7 @@ offboard_precland_controller:
     camera_offset_x: 0.157
     camera_offset_y: 0.0
     camera_offset_z: -0.15
-    marker_size: 0.50
+    marker_size: 0.5
     camera_mount_roll: 180.0
     camera_mount_pitch: 0.0
     camera_mount_yaw: -90.0
