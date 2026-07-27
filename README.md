@@ -187,6 +187,10 @@ Tầng trong cùng (Inner - Level 3): 3.125 cm (0.03125 m)
   /home/teedee/PX4/Tools/simulation/gz/models/gimbal/model.sdf trên đĩa.
   ```
 
+  > [!WARNING]
+  > **Lưu ý quan trọng khi chạy `make distclean`:**
+  > Khi thực hiện `make distclean` hoặc dọn dẹp môi trường build PX4, file `model.sdf` của gimbal sẽ bị reset về giá trị mặc định. Bạn **bắt buộc phải kiểm tra và cập nhật lại** giá trị `<horizontal_fov>1.4137</horizontal_fov>` trong file `/home/teedee/PX4/Tools/simulation/gz/models/gimbal/model.sdf` trước khi khởi động lại mô phỏng SITL/HITL, nếu không node `aruco_fractal_tracker` sẽ sử dụng sai thông số FOV camera dẫn tới việc không thể ước lượng chính xác vị trí marker.
+
 * **Terminal 1: Khởi động PX4 SITL**
 
   ```bash
@@ -581,18 +585,18 @@ Chọn topic `/landing/annotated_image` từ thanh công cụ để theo dõi tr
 
 *   **Terminal 5**:
     ```bash
-    source ~/test_req/install/setup.bash 
+    source ~/test_req/install/setup.bash
     ros2 launch ros2_telemetry plan_upload.launch.py drone_id:=d1
     ```
 
 *   **Terminal 6**:
     ```bash
-    source ~/test_req/install/setup.bash 
+    source ~/test_req/install/setup.bash
     ros2 service call /d1/mission_upload dib_msgs/srv/MissionUpload "{mission: [
       {command: 22, param1: 0.0, param2: 0.0,  latitude: 47.397929, longitude: 8.546217, altitude: 15.0},
-      {command: 16, param1: 5.0, param2: 0.0, latitude: 47.39797, longitude: 8.546322, altitude: 15.0}, 
+      {command: 16, param1: 5.0, param2: 0.0, latitude: 47.39797, longitude: 8.546322, altitude: 15.0},
       {command: 16, param1: 5.0, param2: 0.0, latitude: 47.3979298, longitude: 8.546217, altitude: 15.0},
-      {command: 23, param1: 0.0, param2: 0.0, latitude: 47.3979298, longitude: 8.546217, altitude: 0.0} 
+      {command: 23, param1: 0.0, param2: 0.0, latitude: 47.3979298, longitude: 8.546217, altitude: 0.0}
     ]}"
     ```
 
@@ -627,3 +631,83 @@ source /opt/ros/humble/setup.bash
 source ~/PX4/examples/SITL_PrecisionLanding/ros2_ws/install/setup.bash
 ros2 topic echo /siyi/fractal_pose
 ```
+
+---
+
+## 5. Hướng Dẫn Test Failsafe Trực Quan Qua Giao Diện Web
+
+Công cụ `failsafe_bridge.py` cho phép bạn sử dụng chính giao diện đồ họa Failsafe Sandbox của PX4 để kích hoạt các lỗi khẩn cấp trực tiếp lên mô hình drone đang bay trong Gazebo SITL.
+
+### 5.1. Chuẩn Bị File Chạy
+Đảm bảo file `failsafe_bridge.py` đã được copy vào thư mục build của module WebAssembly:
+```bash
+cp ~/PX4/examples/SITL_PrecisionLanding/backup/failsafe_bridge.py ~/PX4/build/px4_sitl_default_failsafe_web/
+```
+
+### 5.2. Các Bước Khởi Chạy
+
+#### Terminal 1: Khởi động mô phỏng Gazebo SITL
+```bash
+cd ~/PX4
+PX4_GZ_WORLD=fractal_aruco_landing PX4_GZ_NO_FOLLOW=1 make px4_sitl gz_x500_gimbal
+```
+
+#### Terminal 2: Chạy Bridge Server thay thế cho http.server mặc định
+```bash
+cd ~/PX4/build/px4_sitl_default_failsafe_web
+python3 failsafe_bridge.py
+```
+
+#### Trình duyệt Web:
+Mở trình duyệt và truy cập: `http://localhost:8000/`
+
+### 5.3. Các Kịch Bản Test Thực Tế Tất Cả Failsafe Trên Web
+
+1. **Arm / Disarm động cơ**:
+   * Click vào ô **`Armed`** ở cột **State** bên trái. Quan sát drone trong Gazebo sẽ khởi động/tắt động cơ đồng bộ theo nút click của bạn.
+
+2. **Cất cánh và chuyển chế độ bay (Intended Mode)**:
+   * Chuyển dropdown **Intended Mode** sang `AUTO_TAKEOFF` $\rightarrow$ Tích chọn **`Armed`**. Drone sẽ tự động cất cánh trong Gazebo lên 2.5m.
+   * Chuyển sang `POSCTL` (Position) để giữ vị trí drone trên không.
+
+3. **Mất sóng tay cầm điều khiển (RC Loss)**:
+   * Tại cột giữa **Conditions** $\rightarrow$ **Control links**, tích chọn **`Manual control (RC) signal lost`**.
+   * *Kết quả:* PX4 trong Gazebo nhận dạng mất sóng RC, hiển thị chữ đỏ **`RTL`** ở khung Output và tự động quay đầu bay về điểm cất cánh (RTL) và hạ cánh.
+
+4. **Mất kết nối trạm mặt đất (GCS Connection Loss)**:
+   * Tại mục **Control links**, tích chọn **`GCS connection lost`**.
+   * *Kết quả:* PX4 kích hoạt Failsafe GCS loss, hiển thị **`RTL`** màu đỏ và điều khiển drone bay về vị trí ban đầu.
+
+5. **Mất định vị GPS / Tọa độ địa phương (GPS & Position Loss)**:
+   * Tại mục **Mode requirements**, tích chọn **`Global position estimate invalid`** (hoặc `Local position estimate invalid`).
+   * *Kết quả:* Drone lập tức ngắt định vị vị trí, hiển thị chữ đỏ **`Land`** và tự động hạ cánh thẳng đứng khẩn cấp tại chỗ.
+
+6. **Mất tín hiệu Offboard (Offboard Signal Lost)**:
+   * Chuyển **Intended Mode** sang `OFFBOARD` $\rightarrow$ Tích chọn **`Offboard signal lost`**.
+   * *Kết quả:* PX4 chuyển sang chế độ tạm dừng **`Hold`** (Loiter) để chờ tín hiệu khôi phục hoặc fallback về Position/Altitude control.
+
+7. **Các cấp độ pin yếu (Battery Warnings & Low Remaining Time)**:
+   * Tại mục **Battery**, chọn dropdown **Battery warning level**:
+     - `Low` hoặc `Critical`: Hiển thị chữ đỏ **`RTL`** $\rightarrow$ Drone bay về nhà.
+     - `Emergency`: Hiển thị chữ đỏ **`Land`** $\rightarrow$ Drone hạ cánh khẩn cấp tức thì.
+   - Tích chọn **`Low battery based on remaining flight time`**: Kích hoạt bay về nhà (**`RTL`**).
+   - Tích chọn **`Battery unhealthy`**: Hiển thị chữ đỏ **`Disarm`** $\rightarrow$ Động cơ ngắt lập tức.
+
+8. **Cảnh báo giới hạn an toàn (Geofence, Wind Limit, Flight Time Limit)**:
+   * Tích chọn **`Geofence breached (one or multiple)`**: Hiển thị **`RTL`** $\rightarrow$ Drone quay lại vùng an toàn.
+   * Tích chọn **`Wind limit exceeded`**: Hiển thị **`RTL`** $\rightarrow$ Bay về tránh gió mạnh.
+   * Tích chọn **`Maximum flight time exceeded`**: Hiển thị **`RTL`** $\rightarrow$ Bay về do hết giờ bay cho phép.
+
+9. **Hỏng động cơ & Lỗi phần cứng khẩn cấp (Motor Failure & Critical Failures)**:
+   * Tại mục **Failure detector**, tích chọn **`Motor failure`**:
+     - *Kết quả:* Ngắt động cơ số 1 (Unit 101), hiển thị **`Terminate`** màu đỏ $\rightarrow$ Drone mất cân bằng rơi tự do trong Gazebo.
+   * Tích chọn **`Critical failure`** hoặc **`ESC failed to arm`**:
+     - *Kết quả:* Hiển thị **`Disarm`** màu đỏ $\rightarrow$ Động cơ bị khóa khẩn cấp lập tức.
+
+---
+
+### 5.4. Tham Khảo Tài Liệu Chính Thức PX4
+- [PX4 Safety Simulation Guide](https://docs.px4.io/main/en/config/safety_simulation)
+- [PX4 Failure Injection Debugging](https://docs.px4.io/main/en/debug/failure_injection)
+- [PX4 Safety Configuration Reference](https://docs.px4.io/main/en/config/safety)
+
