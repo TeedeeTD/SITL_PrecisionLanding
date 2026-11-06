@@ -711,3 +711,57 @@ Mở trình duyệt và truy cập: `http://localhost:8000/`
 - [PX4 Failure Injection Debugging](https://docs.px4.io/main/en/debug/failure_injection)
 - [PX4 Safety Configuration Reference](https://docs.px4.io/main/en/config/safety)
 
+---
+
+## 6. Hướng Dẫn Mô Phỏng GPS RTK Mode Fixed
+
+Trong mô phỏng SITL với Gazebo (`gz_x500_gimbal`), dữ liệu cảm biến GPS được module cầu nối **`gz_bridge`** (`src/modules/simulation/gz_bridge/GZBridge.cpp`) chuyển đổi trực tiếp từ Gazebo sang uORB topic `sensor_gps`. Mặc định, GPS chỉ đạt **mode 3 (3D Lock)** do không có trạm Base vi sai RTCM. Để mô phỏng GPS đạt trạng thái **mode 6 (RTK Fixed)** phục vụ kiểm thử thuật toán hạ cánh chính xác cao, bạn chỉ cần chỉnh sửa giá trị `fix_type` trong file này.
+
+### 6.1. Vị Trí File Cần Sửa
+
+File mã nguồn phụ trách GPS trong Gazebo SITL là:
+- **`src/modules/simulation/gz_bridge/GZBridge.cpp`** (trong hàm `GZBridge::navSatCallback`)
+
+*(Lưu ý: File `SensorGpsSim.cpp` chỉ dùng cho mô phỏng SIH/HITL, không có tác dụng với Gazebo SITL `gz_*`)*.
+
+### 6.2. Chỉnh Sửa Giá Trị `fix_type`
+
+Mở file `src/modules/simulation/gz_bridge/GZBridge.cpp` và tìm đến đoạn code (khoảng dòng 718):
+
+```cpp
+	if (_sim_gps_used.get() >= 4) {
+		// fix
+		sensor_gps.fix_type = 3; // 3D fix
+		sensor_gps.s_variance_m_s = 0.4f;
+		sensor_gps.c_variance_rad = 0.1f;
+		sensor_gps.eph = 0.9f;
+		sensor_gps.epv = 1.78f;
+		sensor_gps.hdop = 0.7f;
+		sensor_gps.vdop = 1.1f;
+```
+
+👉 **Đổi thành:**
+```cpp
+	if (_sim_gps_used.get() >= 4) {
+		// fix
+		sensor_gps.fix_type = 6; // 3D fixed RTK
+		sensor_gps.s_variance_m_s = 0.4f;
+		sensor_gps.c_variance_rad = 0.1f;
+		sensor_gps.eph = 0.05f; // Sai số vị trí ngang ~5cm chuẩn RTK
+		sensor_gps.epv = 0.08f; // Sai số vị trí dọc ~8cm chuẩn RTK
+		sensor_gps.hdop = 0.7f;
+		sensor_gps.vdop = 1.1f;
+```
+
+### 6.3. Build Lại và Chạy Lại SITL
+
+Bạn **không cần** xóa thư mục build cũ (không cần `make clean`), CMake sẽ tự phát hiện file `GZBridge.cpp` bị thay đổi và build lại cực nhanh:
+
+```bash
+cd ~/PX4
+PX4_GZ_WORLD=fractal_aruco_landing PX4_GZ_NO_FOLLOW=1 make px4_sitl gz_x500_gimbal
+```
+
+Lúc này trên QGroundControl sẽ chuyển trạng thái sang **GPS Lock: RTK Fixed**, và MAVROS topic `/mavros/global_position/raw/fix` cũng như `/mavros/gpsstatus/gps_status` sẽ nhận giá trị `fix_type = 6`.
+
+
